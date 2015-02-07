@@ -5,7 +5,6 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include "definitions.h"
 
 /*----- Numerical Constants -----*/
 
@@ -22,7 +21,7 @@ typedef struct array {
 /*----- Array Functions -----*/
 
 array *create_array();
-bool insert(array *arr, int index, void *data);
+int insert(array *arr, int index, void *data);
 void *retrieve(array *arr, int index);
 void *clear(array *arr, int index);
 void destroy_array(array *arr, void (*destruct) (void *));

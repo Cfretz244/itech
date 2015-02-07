@@ -19,7 +19,7 @@ array *create_array() {
 // Function is responsible for inserting the given data at the specified
 // index. If the underlying array is not large enough, apply exponential reallocation
 // until it is.
-bool insert(array *arr, int index, void *data) {
+int insert(array *arr, int index, void *data) {
     // Check that array is large enough.
     while (index >= arr->size) {
         // Reallocate array.
@@ -33,7 +33,7 @@ bool insert(array *arr, int index, void *data) {
             arr->storage = temp;
         } else {
             // We are out of memory, and the insertion is impossible.
-            return false;
+            return 0;
         }
     }
 
@@ -41,10 +41,10 @@ bool insert(array *arr, int index, void *data) {
     if (!arr->storage[index]) {
         arr->storage[index] = data;
         arr->count++;
-        return true;
+        return 1;
     } else {
         // Index is occupied. Abort insertion.
-        return false;
+        return 0;
     }
 }
 
