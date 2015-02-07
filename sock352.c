@@ -12,7 +12,7 @@
 /*----- Private Struct Declarations -----*/
 
 typedef struct sock352_socket_t {
-    int fd;
+    int fd, sequence_num;
     sockaddr_sock352_t addr;
     socklen_t len;
 } sock352_socket_t;
@@ -22,16 +22,15 @@ typedef struct sock352_socket_t {
 int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socket_t *socket);
 int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket);
 struct sockaddr_in setup_sockaddr(sockaddr_sock352_t *addr);
-void create_header(sock352_pkt_hdr_t header, uint8_t flags, uint16_t checksum, uint32_t len);
+int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socket_t *socket);
+void create_header(sock352_pkt_hdr_t *header, int sequence_num, uint8_t flags, uint16_t checksum, uint32_t len);
 sock352_socket_t *create_352socket(int fd);
 
 /*----- Globals -----*/
 
 int uport = -1, fd_counter = 0;
-int sequence_num = 0;
 
 array *sockets;
-
 
 int sock352_init(int udp_port) {
     if (udp_port <= 0) return SOCK352_FAILURE;
@@ -64,6 +63,7 @@ int sock352_bind(int fd, sockaddr_sock352_t *addr, socklen_t len) {
 }
 
 int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
+    int e_count = 0;
     sockaddr_sock352_t addr_copy;
     memcpy(addr, &addr_copy, sizeof(addr_copy));
     sock352_socket_t *socket = retrieve(sockets, fd);
@@ -76,14 +76,35 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     int bound = sock352_bind(fd, &laddr, len);
     if (!bound) return SOCK352_FAILURE;
 
-    // Perform handshake.
+    // Send SYN.
     sock352_pkt_hdr_t header;
-    create_header(header, SOCK352_SYN, 0, 0);
+    create_header(&header, socket->sequence_num, SOCK352_SYN, 0, 0);
     send_packet(&header, NULL, 0, socket);
-    sock352_pkt_hdr_t resp_header;
-    if (recv_packet(&resp_header, NULL, 0, socket)) {
 
+    // Receive ACK.
+    sock352_pkt_hdr_t resp_header;
+    recv_packet(&resp_header, NULL, socket);
+    while (!valid_packet(&resp_header, NULL, SOCK352_SYN & SOCK352_ACK, socket)) {
+        if (++e_count > 5) return SOCK352_FAILURE;
+        send_packet(&header, NULL, 0, socket);
+        recv_packet(&resp_header, NULL, socket);
     }
+    e_count = 0;
+    socket->sequence_num++;
+
+    // Send ACK.
+    create_header(&header, resp_header.sequence_no + 1, SOCK352_ACK, 0, 0);
+    send_packet(&header, NULL, 0, socket);
+
+    // Make sure ACK was received.
+    while (recv_packet(&resp_header, NULL, socket)) {
+        if (++e_count > 5) return SOCK352_FAILURE;
+        create_header(&header, resp_header.sequence_no + 1, SOCK352_ACK, 0, 0);
+        send_packet(&header, NULL, 0, socket);
+    }
+    
+    // Praise the gods!
+    return SOCK352_SUCCESS;
 }
 
 int sock352_listen(int fd, int n) {
@@ -150,12 +171,17 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket)
     }
     if (recvd_bytes != expected) return 0;
 
-    void *tmp_data = response;
-    // TODO: Add checksum validation here.
-    memcpy(tmp_data, data, expected);
+    if (expected > 0) memcpy(response, data, expected);
     memcpy(&tmp_header, header, sizeof(tmp_header));
 
     return 1;
+}
+
+int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socket_t *socket) {
+    int flag_check = header->flags == flags;
+    int sequence_check = header->ack_no == socket->sequence_num + 1;
+    // TODO: Add checksum validation here.
+    return flag_check && sequence_check;
 }
 
 struct sockaddr_in setup_sockaddr(sockaddr_sock352_t *addr) {
@@ -167,15 +193,15 @@ struct sockaddr_in setup_sockaddr(sockaddr_sock352_t *addr) {
     return udp_addr;
 }
 
-void create_header(sock352_pkt_hdr_t header, uint8_t flags, uint16_t checksum, uint32_t len) {
-    memset(&header, 0, sizeof(header));
-    header.version = SOCK352_VER_1;
-    header.flags = flags;
-    header.header_len = sizeof(header);
-    header.checksum = checksum;
-    header.sequence_no = sequence_num;
-    header.window = 1024;
-    header.payload_len = len;
+void create_header(sock352_pkt_hdr_t *header, int sequence_num, uint8_t flags, uint16_t checksum, uint32_t len) {
+    memset(header, 0, sizeof(header));
+    header->version = SOCK352_VER_1;
+    header->flags = flags;
+    header->header_len = sizeof(header);
+    header->checksum = checksum;
+    header->sequence_no = sequence_num;
+    header->window = 1024;
+    header->payload_len = len;
 }
 
 sock352_socket_t *create_352socket(int fd) {
@@ -183,6 +209,7 @@ sock352_socket_t *create_352socket(int fd) {
 
     if (socket) {
         socket->fd = fd;
+        socket->sequence_num = 0;
     }
 
     return socket;
