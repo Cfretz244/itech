@@ -20,9 +20,9 @@ typedef struct sock352_socket_t {
 /*----- Helper Function Declarations -----*/
 
 int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socket_t *socket);
-int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket);
+int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket, int timeout);
 struct sockaddr_in setup_sockaddr(sockaddr_sock352_t *addr);
-int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socket_t *socket);
+int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socket_t *socket, int check_sequence);
 void create_header(sock352_pkt_hdr_t *header, int sequence_num, uint8_t flags, uint16_t checksum, uint32_t len);
 sock352_socket_t *create_352socket(int fd);
 
@@ -68,7 +68,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     memcpy(addr, &addr_copy, sizeof(addr_copy));
     sock352_socket_t *socket = retrieve(sockets, fd);
     socket->addr = addr_copy;
-    
+
     // Bind to local port.
     sockaddr_sock352_t laddr;
     laddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -81,13 +81,13 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     create_header(&header, socket->sequence_num, SOCK352_SYN, 0, 0);
     send_packet(&header, NULL, 0, socket);
 
-    // Receive ACK.
+    // Receive SYN/ACK.
     sock352_pkt_hdr_t resp_header;
-    recv_packet(&resp_header, NULL, socket);
-    while (!valid_packet(&resp_header, NULL, SOCK352_SYN & SOCK352_ACK, socket)) {
+    int status = recv_packet(&resp_header, NULL, socket, 1);
+    while (!valid_packet(&resp_header, NULL, SOCK352_SYN & SOCK352_ACK, socket, 1) || status == SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
         send_packet(&header, NULL, 0, socket);
-        recv_packet(&resp_header, NULL, socket);
+        recv_packet(&resp_header, NULL, socket, 1);
     }
     e_count = 0;
     socket->sequence_num++;
@@ -97,12 +97,12 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     send_packet(&header, NULL, 0, socket);
 
     // Make sure ACK was received.
-    while (recv_packet(&resp_header, NULL, socket)) {
+    while (recv_packet(&resp_header, NULL, socket, 1) != SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
         create_header(&header, resp_header.sequence_no + 1, SOCK352_ACK, 0, 0);
         send_packet(&header, NULL, 0, socket);
     }
-    
+
     // Praise the gods!
     return SOCK352_SUCCESS;
 }
@@ -112,7 +112,40 @@ int sock352_listen(int fd, int n) {
 }
 
 int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
+    int e_count = 0;
+    sock352_socket_t *socket = retrieve(sockets, _fd);
 
+    while (1) {
+        // Wait for SYN.
+        sock352_pkt_hdr_t header;
+        recv_packet(&header, NULL, socket, 0);
+        while (!valid_packet(&header, NULL, SOCK352_SYN, socket, 0)) {
+            recv_packet(&header, NULL, socket, 1);
+        }
+
+        // Send SYN/ACK.
+        sock352_pkt_hdr_t resp_header;
+        create_header(&resp_header, header.sequence_no + 1, SOCK352_SYN & SOCK352_ACK, 0, 0);
+        send_packet(&resp_header, NULL, 0, socket);
+
+        // Receive ACK.
+        int valid = 1;
+        int status = recv_packet(&header, NULL, socket, 0);
+        while (!valid_packet(&header, NULL, SOCK352_ACK, socket, 1) || status == SOCK352_FAILURE) {
+            if (++e_count < 5) {
+                valid = 0;
+                break;
+            }
+            status = recv_packet(&header, NULL, socket, 1);
+        }
+
+        // Either return new socket for connection, or give up and start over.
+        if (valid) {
+            int fd = fd_counter++;
+            insert(sockets, fd, create_352socket(fd));
+            return fd;
+        }
+    }
 }
 
 int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socket_t *socket) {
@@ -123,7 +156,7 @@ int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socke
     return sendto(socket->fd, packet, sizeof(packet), 0, (struct sockaddr *) &udp_addr, sizeof(udp_addr));
 }
 
-int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket) {
+int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket, int timeout) {
     char response[MAX_UDP_PACKET];
     int recvd_bytes = 0, expected = sizeof(sock352_pkt_hdr_t);
     socklen_t addr_len = sizeof(sockaddr_sock352_t);
@@ -135,9 +168,14 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket)
 
     // Receive header.
     while (recvd_bytes < expected) {
+        int status;
         fd_set to_read;
         FD_SET(socket->fd, &to_read);
-        int status = select(socket->fd + 1, &to_read, NULL, NULL, &time);
+        if (timeout) {
+            status = select(socket->fd + 1, &to_read, NULL, NULL, &time);
+        } else {
+            status = select(socket->fd + 1, &to_read, NULL, NULL, NULL);
+        }
         if (status < 0) return SOCK352_FAILURE;
         if (FD_ISSET(socket->fd, &to_read)) {
             char *ptr = response + recvd_bytes;
@@ -148,7 +186,7 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket)
             break;
         }
     }
-    if (recvd_bytes != expected) return 0;
+    if (recvd_bytes != expected) return SOCK352_FAILURE;
 
     sock352_pkt_hdr_t tmp_header;
     memcpy(response, &tmp_header, sizeof(tmp_header));
@@ -156,9 +194,14 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket)
     recvd_bytes = 0;
 
     while (recvd_bytes < expected) {
+        int status;
         fd_set to_read;
         FD_SET(socket->fd, &to_read);
-        int status = select(socket->fd + 1, &to_read, NULL, NULL, &time);
+        if (timeout) {
+            status = select(socket->fd + 1, &to_read, NULL, NULL, &time);
+        } else {
+            status = select(socket->fd + 1, &to_read, NULL, NULL, NULL);
+        }
         if (status < 0) return SOCK352_FAILURE;
         if (FD_ISSET(socket->fd, &to_read)) {
             char *ptr = response + recvd_bytes;
@@ -169,17 +212,22 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket)
             break;
         }
     }
-    if (recvd_bytes != expected) return 0;
+    if (recvd_bytes != expected) return SOCK352_FAILURE;
 
     if (expected > 0) memcpy(response, data, expected);
     memcpy(&tmp_header, header, sizeof(tmp_header));
 
-    return 1;
+    return SOCK352_SUCCESS;
 }
 
-int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socket_t *socket) {
+int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socket_t *socket, int check_sequence) {
+    int sequence_check;
     int flag_check = header->flags == flags;
-    int sequence_check = header->ack_no == socket->sequence_num + 1;
+    if (check_sequence) {
+        sequence_check = header->ack_no == socket->sequence_num + 1;
+    } else {
+        sequence_check = 1;
+    }
     // TODO: Add checksum validation here.
     return flag_check && sequence_check;
 }
