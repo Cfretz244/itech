@@ -148,6 +148,18 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
     }
 }
 
+int sock352_read(int fd, void *buf, int count) {
+    return 0;
+}
+
+int sock352_write(int fd, void *buf, int count) {
+    return 0;
+}
+
+int sock352_close(int fd) {
+    return 0;
+}
+
 int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socket_t *socket) {
     struct sockaddr_in udp_addr = setup_sockaddr(&socket->addr);
     char packet[sizeof(sock352_pkt_hdr_t) + nbytes];

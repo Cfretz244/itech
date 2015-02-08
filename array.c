@@ -73,7 +73,8 @@ void *clear(array *arr, int index) {
 // Function is responsible for destroying an array struct and all associated
 // data.
 void destroy_array(array *arr, void (*destruct) (void *)) {
-    for (int i = 0; i < arr->size; i++) {
+    int i;
+    for (i = 0; i < arr->size; i++) {
         if (arr->storage[i]) {
             destruct(arr->storage[i]);
         }
