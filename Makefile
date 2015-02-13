@@ -4,7 +4,7 @@ CLIENT = client
 SERVER = server
 
 CC = gcc
-CFLAGS = -I. -I./include -lm -g -lssl -lcrypto -O0
+CFLAGS = -I. -I./include -lm -g -lssl -lcrypto -O0 -pthread
 
 all: $(CLIENT) $(SERVER)
 
