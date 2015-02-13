@@ -18,7 +18,8 @@ typedef enum sock352_types_t {
 } sock352_types_t;
 
 typedef struct sock352_socket_t {
-    int fd, sequence_num, bound;
+    int fd, bound;
+    uint64_t lseq_num, rseq_num;
     sock352_types_t type;
     sockaddr_sock352_t laddr, raddr;
     socklen_t len;
@@ -36,6 +37,7 @@ uint64_t htonll(uint64_t num);
 uint64_t ntohll(uint64_t num);
 int endian_check();
 sock352_socket_t *create_352socket(int fd);
+sock352_socket_t *copysock(sock352_socket_t *socket, int fd);
 
 /*----- Globals -----*/
 
@@ -93,7 +95,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     // Send SYN.
     puts("Sending SYN packet...");
     sock352_pkt_hdr_t header;
-    create_header(&header, socket->sequence_num, 0, SOCK352_SYN, 0, 0);
+    create_header(&header, socket->lseq_num, 0, SOCK352_SYN, 0, 0);
     status = send_packet(&header, NULL, 0, socket);
     if (status < 0) return SOCK352_FAILURE;
 
@@ -112,11 +114,12 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     }
     puts("Successfully received SYN/ACK!");
     e_count = 0;
-    socket->sequence_num++;
+    socket->lseq_num++;
+    socket->rseq_num = resp_header.sequence_no;
 
     // Send ACK.
     puts("Sending ACK...");
-    create_header(&header, socket->sequence_num, resp_header.sequence_no + 1, SOCK352_ACK, 0, 0);
+    create_header(&header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
     send_packet(&header, NULL, 0, socket);
 
     // Make sure ACK was received.
@@ -161,10 +164,11 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
             decode_header(&header);
         }
         puts("Received initial SYN!");
+        socket->rseq_num = header.sequence_no;
 
         // Send SYN/ACK.
         sock352_pkt_hdr_t resp_header;
-        create_header(&resp_header, 0, header.sequence_no + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
+        create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
         puts("Sending SYN/ACK...");
         send_packet(&resp_header, NULL, 0, socket);
 
@@ -184,11 +188,12 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
             status = recv_packet(&header, NULL, socket, 1, 0);
             decode_header(&header);
         }
+        socket->lseq_num++;
 
         // Either return new socket for connection, or give up and start over.
         if (valid) {
             int fd = fd_counter++;
-            insert(sockets, fd, create_352socket(fd));
+            insert(sockets, fd, copysock(socket, fd));
             puts("CONNECTED!!!");
             return fd;
         }
@@ -196,11 +201,15 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
 }
 
 int sock352_read(int fd, void *buf, int count) {
-    return 0;
+    if (count <= 0 || !buf) {
+        return 0;
+    }
 }
 
 int sock352_write(int fd, void *buf, int count) {
-    return 0;
+    if (count <= 0 || !buf) {
+        return 0;
+    }
 }
 
 int sock352_close(int fd) {
@@ -219,8 +228,6 @@ int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socke
     return sendto(socket->fd, packet, num_bytes, 0, (struct sockaddr *) &udp_addr, sizeof(udp_addr));
 }
 
-// FIXME: This function is really broken currently. Need to define how I want to handle setting the initial
-// remote address.
 int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket, int timeout, int save_addr) {
     char response[MAX_UDP_PACKET];
     int header_size = sizeof(sock352_pkt_hdr_t), status;
@@ -263,9 +270,9 @@ int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socke
     int sequence_check;
     int flag_check = header->flags == flags;
     if (check_sequence) {
-        printf("Expected sequence number: %d\n", socket->sequence_num + 1);
+        printf("Expected sequence number: %d\n", socket->lseq_num + 1);
         printf("Received sequence number: %d\n", header->ack_no);
-        sequence_check = header->ack_no == socket->sequence_num + 1;
+        sequence_check = header->ack_no == socket->lseq_num + 1;
     } else {
         sequence_check = 1;
     }
@@ -334,9 +341,27 @@ sock352_socket_t *create_352socket(int fd) {
 
     if (socket) {
         socket->fd = fd;
-        socket->sequence_num = 0;
+        socket->lseq_num = 0;
+        socket->rseq_num = 0;
         socket->type = SOCK352_UNSET;
     }
 
     return socket;
+}
+
+sock352_socket_t *copysock(sock352_socket_t *socket, int fd) {
+    sock352_socket_t *copy = calloc(1, sizeof(sock352_socket_t));
+
+    if (copy) {
+        copy->fd = fd;
+        copy->bound = socket->bound;
+        copy->type = socket->type;
+        copy->len = socket->len;
+        copy->lseq_num = socket->lseq_num;
+        copy->rseq_num = socket->rseq_num;
+        copy->laddr = socket->laddr;
+        copy->raddr = socket->raddr;
+    }
+
+    return copy;
 }
