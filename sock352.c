@@ -11,6 +11,7 @@
 
 #define MAX_UDP_PACKET 65535
 #define MAX_WINDOW_SIZE 1024
+#define RECEIVE_TIMEOUT 200
 
 /*----- Private Struct Declarations -----*/
 
@@ -20,11 +21,17 @@ typedef enum sock352_types {
     SOCK352_CLIENT
 } sock352_types_t;
 
+typedef struct storage {
+    uint32_t size;
+    void *data;
+} storage_t;
+
 typedef struct sock352_socket {
     int fd, bound, should_halt, go_back;
     uint64_t lseq_num, rseq_num, last_ack;
     sock352_types_t type;
     sockaddr_sock352_t laddr, raddr;
+    storage_t temp;
     pthread_mutex_t *write_mutex, *ack_mutex;
     pthread_cond_t *signal;
     socklen_t len;
@@ -120,14 +127,14 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     // Receive SYN/ACK.
     sock352_pkt_hdr_t resp_header;
     puts("Receiving SYN/ACK, cross your fingers...");
-    status = recv_packet(&resp_header, NULL, socket, 1, 0);
+    status = recv_packet(&resp_header, NULL, socket, RECEIVE_TIMEOUT, 0);
     decode_header(&resp_header);
     while (!valid_packet(&resp_header, NULL, SOCK352_SYN | SOCK352_ACK, socket) ||
             !valid_sequence(&resp_header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
         printf("Receive failure #%d...\n", e_count);
         send_packet(&header, NULL, 0, socket);
-        recv_packet(&resp_header, NULL, socket, 1, 0);
+        recv_packet(&resp_header, NULL, socket, RECEIVE_TIMEOUT, 0);
         decode_header(&resp_header);
     }
     puts("Successfully received SYN/ACK!");
@@ -147,10 +154,9 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
 
     // Make sure ACK was received.
     puts("Making sure ACK was received...");
-    while (recv_packet(&resp_header, NULL, socket, 1, 0) != SOCK352_FAILURE) {
+    while (recv_packet(&resp_header, NULL, socket, RECEIVE_TIMEOUT, 0) != SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
         printf("ACK was not received. Try #%d...\n", e_count);
-        create_header(&header, resp_header.sequence_no + 1, 0, SOCK352_ACK, 0, 0);
         send_packet(&header, NULL, 0, socket);
     }
 
@@ -203,7 +209,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         int valid = 1;
         puts("Waiting for ACK...");
         memset(&header, 0, sizeof(header));
-        status = recv_packet(&header, NULL, socket, 1, 0);
+        status = recv_packet(&header, NULL, socket, RECEIVE_TIMEOUT, 0);
         decode_header(&header);
         while (!valid_packet(&header, NULL, SOCK352_ACK, socket) ||
                 !valid_sequence(&header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
@@ -213,7 +219,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
             }
             printf("Receive failure #%d...\n", e_count);
             send_packet(&resp_header, NULL, 0, socket);
-            status = recv_packet(&header, NULL, socket, 1, 0);
+            status = recv_packet(&header, NULL, socket, RECEIVE_TIMEOUT, 0);
             decode_header(&header);
         }
         socket->last_ack = header.ack_no;
@@ -230,14 +236,62 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
     }
 }
 
+// FIXME: Possible for function to eventually overflow temp storage.
 int sock352_read(int fd, void *buf, int count) {
     if (count <= 0 || !buf) {
         return 0;
     }
 
     sock352_socket_t *socket = retrieve(sockets, fd);
-
+    int e_count = 0, status = 0, read = 0;
+    char tmp_buf[MAX_UDP_PACKET * 2];
     sock352_pkt_hdr_t header;
+
+    if (socket->temp.size > 0) {
+        int to_move = 0;
+        if (socket->temp.size > count) {
+            to_move = count;
+        } else {
+            to_move = socket->temp.size;
+        }
+        memcpy(tmp_buf, socket->temp.data, to_move);
+        socket->temp.size -= to_move;
+        if (socket->temp.size > 0) {
+            uint32_t size = socket->temp.size;
+            char *ptr = socket->temp.data;
+            memcpy(ptr, ptr + to_move, size);
+        }
+        read += to_move;
+    }
+
+    status = recv_packet(&header, tmp_buf + read, socket, RECEIVE_TIMEOUT, 0);
+    decode_header(&header);
+    while (!valid_packet(&header, tmp_buf + read, 0, socket) ||
+            !valid_sequence(&header, socket->rseq_num, 1) || status == SOCK352_FAILURE) {
+        if (++e_count > 5) break;
+        status = recv_packet(&header, tmp_buf + read, socket, RECEIVE_TIMEOUT, 0);
+        decode_header(&header);
+    }
+
+    if (e_count < 5) {
+        int to_move = 0;
+        if (read + header.payload_len <= count) {
+            to_move = read + header.payload_len;
+        } else {
+            to_move = count;
+            uint32_t size = header.payload_len - count + read;
+            char *data = socket->temp.data;
+            memcpy(data + socket->temp.size, tmp_buf + count, size);
+        }
+        // Send ack.
+        memcpy(buf, tmp_buf, to_move);
+        return to_move;
+    } else if (read > 0) {
+        memcpy(buf, tmp_buf, read);
+        return read;
+    } else {
+        return 0;
+    }
 }
 
 int sock352_write(int fd, void *buf, int count) {
@@ -270,7 +324,7 @@ int sock352_write(int fd, void *buf, int count) {
         int current = total - sent, e_count = 0, status = SOCK352_FAILURE;
         void *ptr = buf + sent;
         if (current > MAX_UDP_PACKET) current = MAX_UDP_PACKET;
-        
+
         sock352_pkt_hdr_t header;
         create_header(&header, socket->lseq_num++, socket->rseq_num, 0, 0, current);
         do {
@@ -302,6 +356,8 @@ sock352_socket_t *create_352socket(int fd) {
 
     if (socket) {
         socket->fd = fd;
+
+        socket->temp.data = malloc(MAX_UDP_PACKET);
 
         socket->write_mutex = malloc(sizeof(pthread_mutex_t));
         pthread_mutex_init(socket->write_mutex, NULL);
@@ -338,7 +394,7 @@ void *handle_acks(void *sock) {
 
     while (!socket->should_halt) {
         sock352_pkt_hdr_t header;
-        int status = recv_packet(&header, NULL, socket, 1, 0);
+        int status = recv_packet(&header, NULL, socket, RECEIVE_TIMEOUT, 0);
         if (status == SOCK352_FAILURE) {
             pthread_mutex_lock(socket->write_mutex);
             int difference = socket->lseq_num - socket->last_ack;
@@ -373,7 +429,7 @@ int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socke
     return sendto(socket->fd, packet, num_bytes, 0, (struct sockaddr *) &udp_addr, sizeof(udp_addr));
 }
 
-int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket, int timeout, int save_addr) {
+int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket, int timeout_msecs, int save_addr) {
     char response[MAX_UDP_PACKET];
     int header_size = sizeof(sock352_pkt_hdr_t), status;
     struct sockaddr_in sender;
@@ -382,11 +438,11 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     // Setup timeout structure.
     struct timeval time;
     time.tv_sec = 0;
-    time.tv_usec = 200000;
+    time.tv_usec = timeout_msecs;
 
     fd_set to_read;
     FD_SET(socket->fd, &to_read);
-    if (timeout) {
+    if (timeout_msecs) {
         select(socket->fd + 1, &to_read, NULL, NULL, &time);
     } else {
         select(socket->fd + 1, &to_read, NULL, NULL, NULL);
@@ -485,4 +541,3 @@ int endian_check() {
     int num = 42;
     return *((char *) &num) == 42;
 }
-
