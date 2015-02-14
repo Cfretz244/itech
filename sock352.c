@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include "sock352.h"
 #include "array.h"
+#include "list.h"
 
 /*---- Private Constants -----*/
 
@@ -233,6 +234,10 @@ int sock352_read(int fd, void *buf, int count) {
     if (count <= 0 || !buf) {
         return 0;
     }
+
+    sock352_socket_t *socket = retrieve(sockets, fd);
+
+    sock352_pkt_hdr_t header;
 }
 
 int sock352_write(int fd, void *buf, int count) {

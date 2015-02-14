@@ -1,4 +1,5 @@
 ARRAY = array.o
+LIST = list.o
 LIB = sock352.o
 CLIENT = client
 SERVER = server
@@ -14,11 +15,14 @@ $(CLIENT): $(LIB) client.c
 $(SERVER): $(LIB) server.c
 	$(CC) $(CFLAGS) -o server server.c $(LIB) $(ARRAY)
 
-$(LIB): $(ARRAY) sock352.c sock352.h
+$(LIB): $(ARRAY) $(LIST) sock352.c sock352.h
 	$(CC) $(CFLAGS) -c sock352.c -o sock352.o
 
 $(ARRAY): array.c array.h
 	$(CC) $(CFLAGS) -c array.c -o array.o
+
+$(LIST): list.c list.h
+	$(CC) $(CFLAGS) -c list.c -o list.o
 
 clean:
 	rm *.o
