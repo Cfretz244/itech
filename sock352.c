@@ -128,14 +128,12 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     sock352_pkt_hdr_t resp_header;
     puts("Receiving SYN/ACK, cross your fingers...");
     status = recv_packet(&resp_header, NULL, socket, 1, 0);
-    decode_header(&resp_header);
     while (!valid_packet(&resp_header, NULL, SOCK352_SYN | SOCK352_ACK, socket) ||
             !valid_sequence(&resp_header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
         printf("Receive failure #%d...\n", e_count);
         send_packet(&header, NULL, 0, socket);
         recv_packet(&resp_header, NULL, socket, 1, 0);
-        decode_header(&resp_header);
     }
     puts("Successfully received SYN/ACK!");
     e_count = 0;
@@ -185,11 +183,9 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         sock352_pkt_hdr_t header;
         memset(&header, 0, sizeof(header));
         status = recv_packet(&header, NULL, socket, 0, 1);
-        decode_header(&header);
         while (!valid_packet(&header, NULL, SOCK352_SYN, socket) || status == SOCK352_FAILURE) {
             puts("Received packet was invalid, trying again");
             status = recv_packet(&header, NULL, socket, 0, 1);
-            decode_header(&header);
         }
         puts("Received initial SYN!");
         socket->rseq_num = header.sequence_no;
@@ -210,7 +206,6 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         puts("Waiting for ACK...");
         memset(&header, 0, sizeof(header));
         status = recv_packet(&header, NULL, socket, 1, 0);
-        decode_header(&header);
         while (!valid_packet(&header, NULL, SOCK352_ACK, socket) ||
                 !valid_sequence(&header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
             if (++e_count > 5) {
@@ -220,7 +215,6 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
             printf("Receive failure #%d...\n", e_count);
             send_packet(&resp_header, NULL, 0, socket);
             status = recv_packet(&header, NULL, socket, 1, 0);
-            decode_header(&header);
         }
         socket->last_ack = header.ack_no;
         socket->lseq_num++;
@@ -265,12 +259,10 @@ int sock352_read(int fd, void *buf, int count) {
     }
 
     status = recv_packet(&header, tmp_buf + read, socket, 1, 0);
-    decode_header(&header);
     while (!valid_packet(&header, tmp_buf + read, 0, socket) ||
             !valid_sequence(&header, socket->rseq_num, 1) || status == SOCK352_FAILURE) {
         if (++e_count > 5) break;
         status = recv_packet(&header, tmp_buf + read, socket, 1, 0);
-        decode_header(&header);
     }
 
     if (e_count < 5) {
@@ -459,6 +451,7 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     }
 
     memcpy(header, response, sizeof(sock352_pkt_hdr_t));
+    decode_header(header);
     if (data) memcpy(data, response + header_size, header->payload_len);
 
     return SOCK352_SUCCESS;
