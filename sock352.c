@@ -295,17 +295,20 @@ int sock352_write(int fd, void *buf, int count) {
 
     sock352_socket_t *socket = retrieve(sockets, fd);
     if (!socket) return SOCK352_FAILURE;
-    int total = count, sent = 0;
+    int total = count, sent = 0, locked;
 
     pthread_t thread;
     pthread_create(&thread, NULL, handle_acks, socket);
 
-    while (sent < total) {
-        pthread_mutex_lock(socket->ack_mutex);
-        if ((socket->lseq_num - socket->last_ack) >= MAX_WINDOW_SIZE) {
+    pthread_mutex_lock(socket->ack_mutex);
+    locked = 1;
+    while (sent < total || socket->last_ack != socket->lseq_num - 1) {
+        if ((socket->lseq_num - socket->last_ack) >= MAX_WINDOW_SIZE || sent == total) {
             pthread_cond_wait(socket->signal, socket->ack_mutex);
         }
         pthread_mutex_unlock(socket->ack_mutex);
+        locked = 0;
+        if (sent == total) continue;
 
         pthread_mutex_lock(socket->write_mutex);
         if (socket->go_back) {
@@ -331,8 +334,14 @@ int sock352_write(int fd, void *buf, int count) {
         } while (status == SOCK352_FAILURE);
         sent += current;
         pthread_mutex_unlock(socket->write_mutex);
+
+        pthread_mutex_lock(socket->ack_mutex);
+        locked = 1;
     }
-    // FIXME: Need to actually check status of acks here.
+    if (locked) {
+        pthread_mutex_unlock(socket->ack_mutex);
+        locked = 0;
+    }
 
     socket->should_halt = 1;
     pthread_join(thread, NULL);
@@ -389,7 +398,7 @@ void *handle_acks(void *sock) {
     while (!socket->should_halt) {
         sock352_pkt_hdr_t header;
         int status = recv_packet(&header, NULL, socket, 1, 0);
-        if (status == SOCK352_FAILURE) {
+        if (status == SOCK352_FAILURE && !socket->should_halt) {
             pthread_mutex_lock(socket->write_mutex);
             int difference = socket->lseq_num - socket->last_ack;
             socket->lseq_num = socket->last_ack + 1;
@@ -397,10 +406,15 @@ void *handle_acks(void *sock) {
             pthread_cond_signal(socket->signal);
             pthread_mutex_unlock(socket->write_mutex);
         }
-        if (valid_packet(&header, NULL, SOCK352_ACK, socket) && valid_sequence(&header, socket->last_ack + 1, 0)) {
+        if (valid_packet(&header, NULL, SOCK352_ACK, socket) &&
+                valid_ack(&header, socket->last_ack + 1, 0) && !socket->should_halt) {
+            pthread_mutex_lock(socket->ack_mutex);
             socket->last_ack = header.ack_no;
+            pthread_cond_signal(socket->signal);
+            pthread_mutex_unlock(socket->ack_mutex);
         }
     }
+    socket->should_halt = 0;
 
     return NULL;
 }
