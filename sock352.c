@@ -501,22 +501,24 @@ sock352_socket_t *copysock(sock352_socket_t *socket) {
 
 void *handle_acks(void *sock) {
     sock352_socket_t *socket = sock;
+    int e_count = 0;
     puts("Handle_Acks: Starting...");
 
     // Continue looping until the data sending thread decides we're done.
     while (!socket->should_halt) {
         sock352_pkt_hdr_t header;
-        int count = 0, status = SOCK352_FAILURE;
+        int time_counter = 0, status = SOCK352_FAILURE;
         memset(&header, 0, sizeof(header));
         puts("Handle_Acks: Waiting on packet");
-        while (count < 20 && !socket->should_halt && status == SOCK352_FAILURE) {
+        while (time_counter < 20 && !socket->should_halt && status == SOCK352_FAILURE) {
             status = recv_packet(&header, NULL, socket, 10, 0);
-            count++;
+            time_counter++;
         }
-        if (status == SOCK352_FAILURE && !socket->should_halt) {
+        if ((status == SOCK352_FAILURE || e_count > 5) && !socket->should_halt) {
             // The receive operation has timed out, which indicates we've lost a packet and come
             // to a halt. Figure out the number of packets we need to jump back, and unblock the
             // sending thread.
+            e_count = 0;
             pthread_mutex_lock(socket->write_mutex);
             int difference = socket->lseq_num - socket->last_ack;
             printf("Handle_Acks: Packet receive timed out, going back %d...\n", difference);
@@ -528,11 +530,14 @@ void *handle_acks(void *sock) {
         if (valid_packet(&header, NULL, SOCK352_ACK, socket) &&
                 valid_ack(&header, socket->last_ack + 1, 0) && !socket->should_halt) {
             // We've received a valid ACK packet. Update last_ack.
+            e_count = 0;
             pthread_mutex_lock(socket->ack_mutex);
             socket->last_ack = header.ack_no;
             printf("Handle_Acks: Packet Receive succeeded, updated last_ack to %d...\n", socket->last_ack);
             pthread_cond_signal(socket->signal);
             pthread_mutex_unlock(socket->ack_mutex);
+        } else {
+            e_count++;
         }
     }
 
