@@ -402,7 +402,7 @@ void *handle_acks(void *sock) {
             pthread_mutex_lock(socket->write_mutex);
             int difference = socket->lseq_num - socket->last_ack;
             socket->lseq_num = socket->last_ack + 1;
-            socket->go_back = difference - 1;
+            socket->go_back = difference;
             pthread_cond_signal(socket->signal);
             pthread_mutex_unlock(socket->write_mutex);
         }
