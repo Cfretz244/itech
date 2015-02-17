@@ -389,7 +389,9 @@ int sock352_write(int fd, void *buf, int count) {
             // the specified number of packets and resend.
             if (socket->go_back) {
                 printf("Sock352_Write: Going back %d\n", socket->go_back);
-                sent -= (socket->go_back * MAX_UDP_PACKET);
+
+                // FIXME: The go-back multiplier is currently hard coded. This needs to be fixed.
+                sent -= (socket->go_back * 8192);
                 socket->go_back = 0;
                 continue;
             }
@@ -519,7 +521,7 @@ void *handle_acks(void *sock) {
             int difference = socket->lseq_num - socket->last_ack;
             printf("Handle_Acks: Packet receive timed out, going back %d...\n", difference);
             socket->lseq_num = socket->last_ack + 1;
-            socket->go_back = difference;
+            socket->go_back = difference - 1;
             pthread_cond_signal(socket->signal);
             pthread_mutex_unlock(socket->write_mutex);
         }
