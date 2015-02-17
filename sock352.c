@@ -151,7 +151,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     } while (status == SOCK352_FAILURE);
     e_count = 0;
 
-    // Make sure ACK was received.
+    // Make sure ACK was received, and increment remote sequence number if so.
     puts("Making sure ACK was received...");
     while (recv_packet(&resp_header, NULL, socket, 1, 0) != SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
@@ -159,6 +159,11 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
         send_packet(&header, NULL, 0, socket);
     }
     socket->rseq_num++;
+
+    // In general, my implementation of TCP does not increment sequence numbers when sending ACKs,
+    // however, in this case, it significantly simplifies the writing logic if we can assume that
+    // write will be called with a unique sequence number, and so here it is incremented.
+    socket->lseq_num++;
 
     // Praise the gods!
     puts("CONNECTED!!!");
@@ -232,7 +237,6 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
     }
 }
 
-// FIXME: Possible for function to eventually overflow temp storage.
 int sock352_read(int fd, void *buf, int count) {
     if (count <= 0 || !buf) {
         return 0;
@@ -241,49 +245,98 @@ int sock352_read(int fd, void *buf, int count) {
     sock352_socket_t *socket = retrieve(sockets, fd);
     int e_count = 0, status = 0, read = 0;
     char tmp_buf[MAX_UDP_PACKET * 2];
-    sock352_pkt_hdr_t header;
+    sock352_pkt_hdr_t header, resp_header;
 
+    // Check if there is buffered data that needs to be delivered to the calling process.
     if (socket->temp.size > 0) {
         int to_move = 0;
+        // Check if the provided memory is large enough to include everything in the buffer.
+        // If not, calculate how much to copy.
         if (socket->temp.size > count) {
             to_move = count;
-        } else {
+        } else if (socket->temp.size <= MAX_UDP_PACKET){
             to_move = socket->temp.size;
+        } else {
+            to_move = MAX_UDP_PACKET;
         }
+
+        // Copy the calculated number of bytes from the buffer to the current packet storage.
         memcpy(tmp_buf, socket->temp.data, to_move);
         socket->temp.size -= to_move;
+
+        // If we didn't empty the buffer, move all of the yet to be retrieved data to the front.
         if (socket->temp.size > 0) {
             uint32_t size = socket->temp.size;
             char *ptr = socket->temp.data;
             memcpy(ptr, ptr + to_move, size);
         }
+
+        // Update the number of read bytes.
         read += to_move;
     }
 
+    // Receive and verify packet, updating the remote sequence number upon a pass.
     status = recv_packet(&header, tmp_buf + read, socket, 1, 0);
     while (!valid_packet(&header, tmp_buf + read, 0, socket) ||
-            !valid_sequence(&header, socket->rseq_num, 1) || status == SOCK352_FAILURE) {
+            !valid_sequence(&header, socket->rseq_num + 1) || status == SOCK352_FAILURE) {
         if (++e_count > 5) break;
+
+        // FIXME: Potential, but exceedingly unlikely, issue here. If we run into deadlock
+        // conditions, re-evaluate checking the status of this send.
+        create_header(&resp_header, socket->lseq_num, socket->rseq_num, SOCK352_ACK, 0, 0);
+        send_packet(&resp_header, NULL, 0, socket);
+
         status = recv_packet(&header, tmp_buf + read, socket, 1, 0);
     }
+    socket->rseq_num = header.sequence_no;
 
+    // If the packet reception was successful, send ACK, and return any buffered data, plus
+    // whatever received data will fit in the given memory, otherwise just return any buffered
+    // data.
     if (e_count < 5) {
-        int to_move = 0;
+        int to_move = 0, received = 1;
+        // Data was successfully received, check if we need to/can buffer any of the received
+        // data.
         if (read + header.payload_len <= count) {
+            // No buffering is necessary. Return all received data.
             to_move = read + header.payload_len;
         } else {
+            // Buffering is necessary. Check if we have enough space for it.
             to_move = count;
             uint32_t size = header.payload_len - count + read;
-            char *data = socket->temp.data;
-            memcpy(data + socket->temp.size, tmp_buf + count, size);
+            if (size + socket->temp.size <= MAX_UDP_PACKET * 2) {
+                // There is enough buffer space left for excess received data. Store it.
+                char *data = socket->temp.data;
+                memcpy(data + socket->temp.size, tmp_buf + count, size);
+                socket->temp.size += size;
+            } else {
+                // There is not enough buffer space left for excess received data. Dump it and
+                // set the received flag to zero so that an ACK will not be send for the
+                // discarded data.
+                received = 0;
+                to_move = read;
+            }
         }
-        // Send ack.
-        memcpy(buf, tmp_buf, to_move);
+        
+        // Send an ACK if the data was successfully/did not need to be buffered.
+        if (received) {
+            e_count = 0;
+            create_header(&resp_header, socket->lseq_num, socket->rseq_num, SOCK352_ACK, 0, 0);
+            do {
+                status = send_packet(&resp_header, NULL, 0, socket);
+                if (++e_count > 5) break;
+            } while (status == SOCK352_FAILURE);
+        }
+
+        // If there is data to return, return it.
+        if (to_move) memcpy(buf, tmp_buf, to_move);
         return to_move;
     } else if (read > 0) {
+        // Data was not successfully received, however, there is still buffered data to return.
         memcpy(buf, tmp_buf, read);
         return read;
     } else {
+        // Data was not successfully received, and there is nothing in the buffer.
         return 0;
     }
 }
@@ -297,20 +350,34 @@ int sock352_write(int fd, void *buf, int count) {
     if (!socket) return SOCK352_FAILURE;
     int total = count, sent = 0, locked;
 
+    // Create the ACK receiving thread.
     pthread_t thread;
     pthread_create(&thread, NULL, handle_acks, socket);
 
+    // Although most likely unnecessary the first time, we lock the ack_mutex to read the
+    // last_ack and sequence number, ensuring we have the very most recent information.
     pthread_mutex_lock(socket->ack_mutex);
     locked = 1;
     while (sent < total || socket->last_ack != socket->lseq_num - 1) {
         if ((socket->lseq_num - socket->last_ack) >= MAX_WINDOW_SIZE || sent == total) {
+            // Execution halts here in the case either:
+            //  1. We have run out of window space, and are waiting on either a timeout or
+            //     successful ACK to continue.
+            //  2. We have finished sending data, but have not received all ACKs yet.
+            //     Execution resumes when either we receive a new ACK or we time out.
             pthread_cond_wait(socket->signal, socket->ack_mutex);
+            
+            // If all data has already been sent, jump us back to the condition check to see
+            // if we've received all of the ACKs yet.
+            if (sent == total) continue;
         }
         pthread_mutex_unlock(socket->ack_mutex);
         locked = 0;
-        if (sent == total) continue;
 
         pthread_mutex_lock(socket->write_mutex);
+
+        // Check if the ACK receiving thread has detected a lost packet, and if so, jump back
+        // the specified number of packets and resend.
         if (socket->go_back) {
             sent -= (socket->go_back * MAX_UDP_PACKET);
             socket->go_back = 0;
@@ -318,10 +385,12 @@ int sock352_write(int fd, void *buf, int count) {
             continue;
         }
 
+        // Figure out which and how many bytes to send in this packet.
         int current = total - sent, e_count = 0, status = SOCK352_FAILURE;
         void *ptr = buf + sent;
         if (current > MAX_UDP_PACKET) current = MAX_UDP_PACKET;
 
+        // Create the header and send the data.
         sock352_pkt_hdr_t header;
         create_header(&header, socket->lseq_num++, socket->rseq_num, 0, 0, current);
         do {
@@ -335,14 +404,20 @@ int sock352_write(int fd, void *buf, int count) {
         sent += current;
         pthread_mutex_unlock(socket->write_mutex);
 
+        // Lock ack_mutex so that when the loop reintializes, it's guaranteed to read the
+        // most recent information. Set local locked variable so we remember to unlock the mutex
+        // if the loop does not reinitialize.
         pthread_mutex_lock(socket->ack_mutex);
         locked = 1;
     }
+
+    // Unlock mutex if the loop left it locked.
     if (locked) {
         pthread_mutex_unlock(socket->ack_mutex);
         locked = 0;
     }
 
+    // Halt the ACK receiving thread.
     socket->should_halt = 1;
     pthread_join(thread, NULL);
     return sent;
@@ -395,10 +470,14 @@ sock352_socket_t *copysock(sock352_socket_t *socket) {
 void *handle_acks(void *sock) {
     sock352_socket_t *socket = sock;
 
+    // Continue looping until the data sending thread decides we're done.
     while (!socket->should_halt) {
         sock352_pkt_hdr_t header;
         int status = recv_packet(&header, NULL, socket, 1, 0);
         if (status == SOCK352_FAILURE && !socket->should_halt) {
+            // The receive operation has timed out, which indicates we've lost a packet and come
+            // to a halt. Figure out the number of packets we need to jump back, and unblock the
+            // sending thread.
             pthread_mutex_lock(socket->write_mutex);
             int difference = socket->lseq_num - socket->last_ack;
             socket->lseq_num = socket->last_ack + 1;
@@ -408,12 +487,15 @@ void *handle_acks(void *sock) {
         }
         if (valid_packet(&header, NULL, SOCK352_ACK, socket) &&
                 valid_ack(&header, socket->last_ack + 1, 0) && !socket->should_halt) {
+            // We've received a valid ACK packet. Update last_ack.
             pthread_mutex_lock(socket->ack_mutex);
             socket->last_ack = header.ack_no;
             pthread_cond_signal(socket->signal);
             pthread_mutex_unlock(socket->ack_mutex);
         }
     }
+
+    // Clear this condition to allow for subsequent write calls.
     socket->should_halt = 0;
 
     return NULL;
