@@ -496,6 +496,7 @@ void *handle_acks(void *sock) {
     // Continue looping until the data sending thread decides we're done.
     while (!socket->should_halt) {
         sock352_pkt_hdr_t header;
+        memset(&header, 0, sizeof(header));
         puts("Handle_Acks: Waiting on packet");
         int status = recv_packet(&header, NULL, socket, 1, 0);
         if (status == SOCK352_FAILURE && !socket->should_halt) {
@@ -539,7 +540,7 @@ int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socke
     char packet[sizeof(sock352_pkt_hdr_t) + nbytes];
 
     memcpy(&packet, header, sizeof(sock352_pkt_hdr_t));
-    if (data) memcpy(&packet + sizeof(sock352_pkt_hdr_t), data, nbytes);
+    if (data) memcpy(packet + sizeof(sock352_pkt_hdr_t), data, nbytes);
     int num_bytes = data ? sizeof(packet) : sizeof(sock352_pkt_hdr_t);
 
     return sendto(socket->fd, packet, num_bytes, 0, (struct sockaddr *) &udp_addr, sizeof(udp_addr));
