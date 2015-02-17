@@ -328,7 +328,7 @@ int sock352_read(int fd, void *buf, int count) {
                 to_move = read;
             }
         }
-        
+
         // Send an ACK if the data was successfully/did not need to be buffered.
         if (received) {
             e_count = 0;
@@ -385,6 +385,15 @@ int sock352_write(int fd, void *buf, int count) {
             //     Execution resumes when either we receive a new ACK or we time out.
             pthread_cond_wait(socket->signal, socket->ack_mutex);
             
+            // Check if the ACK receiving thread has detected a lost packet, and if so, jump back
+            // the specified number of packets and resend.
+            if (socket->go_back) {
+                printf("Sock352_Write: Going back %d\n", socket->go_back);
+                sent -= (socket->go_back * MAX_UDP_PACKET);
+                socket->go_back = 0;
+                continue;
+            }
+
             // If all data has already been sent, jump us back to the condition check to see
             // if we've received all of the ACKs yet.
             if (sent == total) continue;
@@ -394,8 +403,7 @@ int sock352_write(int fd, void *buf, int count) {
 
         pthread_mutex_lock(socket->write_mutex);
 
-        // Check if the ACK receiving thread has detected a lost packet, and if so, jump back
-        // the specified number of packets and resend.
+        // The code duplication here pains me, but I believe both checks are necessary.
         if (socket->go_back) {
             printf("Sock352_Write: Going back %d\n", socket->go_back);
             sent -= (socket->go_back * MAX_UDP_PACKET);
