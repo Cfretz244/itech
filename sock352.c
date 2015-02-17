@@ -496,9 +496,13 @@ void *handle_acks(void *sock) {
     // Continue looping until the data sending thread decides we're done.
     while (!socket->should_halt) {
         sock352_pkt_hdr_t header;
+        int count = 0, status = SOCK352_FAILURE;
         memset(&header, 0, sizeof(header));
         puts("Handle_Acks: Waiting on packet");
-        int status = recv_packet(&header, NULL, socket, 1, 0);
+        while (count < 20 && !socket->should_halt && status == SOCK352_FAILURE) {
+            status = recv_packet(&header, NULL, socket, 10, 0);
+            count++;
+        }
         if (status == SOCK352_FAILURE && !socket->should_halt) {
             // The receive operation has timed out, which indicates we've lost a packet and come
             // to a halt. Figure out the number of packets we need to jump back, and unblock the
@@ -561,6 +565,7 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     FD_ZERO(&to_read);
     FD_SET(socket->fd, &to_read);
     if (timeout) {
+        if (timeout != 1) time.tv_usec = timeout * 1000;
         status = select(socket->fd + 1, &to_read, NULL, NULL, &time);
     } else {
         status = select(socket->fd + 1, &to_read, NULL, NULL, NULL);
