@@ -279,6 +279,7 @@ int sock352_read(int fd, void *buf, int count) {
     }
 
     // Receive and verify packet, updating the remote sequence number upon a pass.
+    memset(&header, 0, sizeof(header));
     status = recv_packet(&header, tmp_buf + read, socket, 1, 0);
     puts("Sock352_Read: Received a packet, validating...");
     while (!valid_packet(&header, tmp_buf + read, 0, socket) ||
@@ -293,6 +294,7 @@ int sock352_read(int fd, void *buf, int count) {
 
         status = recv_packet(&header, tmp_buf + read, socket, 1, 0);
     }
+    if (e_count > 5) return 0;
     socket->rseq_num = header.sequence_no;
 
     // If the packet reception was successful, send ACK, and return any buffered data, plus
@@ -408,10 +410,10 @@ int sock352_write(int fd, void *buf, int count) {
         if (current > MAX_UDP_PACKET) current = MAX_UDP_PACKET;
 
         // Create the header and send the data.
-        printf("Sock352_Write: About to send %d bytes...\n", current);
         sock352_pkt_hdr_t header;
         create_header(&header, socket->lseq_num++, socket->rseq_num, 0, 0, current);
         do {
+            printf("Sock352_Write: About to send %d bytes...\n", current);
             status = send_packet(&header, ptr, current, socket);
             if (++e_count > 5) {
                 socket->should_halt = 1;
