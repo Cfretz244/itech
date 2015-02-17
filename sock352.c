@@ -49,7 +49,8 @@ void destroy_352socket(sock352_socket_t *socket);
 int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socket_t *socket);
 int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket, int timeout, int save_addr);
 int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socket_t *socket);
-int valid_sequence(sock352_pkt_hdr_t *header, int expected, int exact);
+int valid_sequence(sock352_pkt_hdr_t *header, int expected);
+int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact);
 
 /*----- Header Manipulation Function Declarations -----*/
 
@@ -129,7 +130,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     puts("Receiving SYN/ACK, cross your fingers...");
     status = recv_packet(&resp_header, NULL, socket, 1, 0);
     while (!valid_packet(&resp_header, NULL, SOCK352_SYN | SOCK352_ACK, socket) ||
-            !valid_sequence(&resp_header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
+            !valid_ack(&resp_header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
         printf("Receive failure #%d...\n", e_count);
         send_packet(&header, NULL, 0, socket);
@@ -157,6 +158,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
         printf("ACK was not received. Try #%d...\n", e_count);
         send_packet(&header, NULL, 0, socket);
     }
+    socket->rseq_num++;
 
     // Praise the gods!
     puts("CONNECTED!!!");
@@ -207,7 +209,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         memset(&header, 0, sizeof(header));
         status = recv_packet(&header, NULL, socket, 1, 0);
         while (!valid_packet(&header, NULL, SOCK352_ACK, socket) ||
-                !valid_sequence(&header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
+                !valid_ack(&header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
             if (++e_count > 5) {
                 valid = 0;
                 break;
@@ -469,7 +471,11 @@ int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags, sock352_socke
     return flag_check && sum_check;
 }
 
-int valid_sequence(sock352_pkt_hdr_t *header, int expected, int exact) {
+int valid_sequence(sock352_pkt_hdr_t *header, int expected) {
+    return header->sequence_no == expected;
+}
+
+int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact) {
     if (exact) {
         return header->ack_no == expected;
     } else {
