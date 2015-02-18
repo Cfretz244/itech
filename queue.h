@@ -38,11 +38,12 @@ void enqueue(queue_t *q, void *data, int size);
 int dequeue(queue_t *q, void *buffer, int size);
 int drop(queue_t *q, void *buffer, int size);
 int queue_current_data_size(queue_t *q);
+void empty(queue_t *q);
 void destroy_queue(queue_t *q);
 
 /*----- Queue Node Functions -----*/
 
 queue_node_t *create_queue_node(void *data, int size);
-void destroy_queue_node(queue_node_t *node);
+void destroy_queue_node(queue_node_t *node, void (*destructor)(void *));
 
 #endif

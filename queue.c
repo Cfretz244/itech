@@ -1,8 +1,8 @@
-#include "list.h"
+#include "queue.h"
 
 /*----- List Functions -----*/
 
-// Function is responsible for creating a non-threaded list struct.
+// Function is responsible for creating a queue struct.
 queue_t *create_queue(queue_type_t type, int max, void (*destructor)(void *)) {
     queue_t *q = (queue_t *) malloc(sizeof(queue_t));
 
@@ -38,7 +38,7 @@ void enqueue(queue_t *q, void *data, int size) {
         pthread_cond_wait(q->full, q->mutex);
     }
 
-    // Push data into list at head and increment count.
+    // Push data into queue at tail and increment count.
     queue_node_t *node = create_queue_node(data, size);
     if (q->head) {
         q->tail->next = node;
@@ -74,7 +74,7 @@ int dequeue(queue_t *q, void *buffer, int size) {
         } else {
             q->head = node->next;
             q->current = node->next;
-            destroy_queue_node(node);
+            destroy_queue_node(node, q->destructor);
             q->count--;
             pthread_cond_signal(q->full);
         }
@@ -96,9 +96,10 @@ int drop(queue_t *q, void *buffer, int size) {
 
     queue_node_t *node = q->head;
     q->head = node->next;
+    if (q->current == node) q->current = node->next;
     int read = node->size;
     memcpy(buffer, node->data, read);
-    destroy_queue_node(node);
+    destroy_queue_node(node, q->destructor);
     q->count--;
     pthread_cond_signal(q->full);
 
@@ -116,18 +117,24 @@ int queue_current_data_size(queue_t *q) {
     return size;
 }
 
-// Function is responsible for destroying a list.
-void destroy_queue(queue_t *q) {
-    // If list contains data, iterate across it, freeing nodes as we go.
-    if (q->head) {
-        queue_node_t *current = q->head;
-        while (current) {
-            queue_node_t *tmp = current;
-            current = current->next;
-            destroy_queue_node(tmp);
-        }
+void empty(queue_t *q) {
+    if (!q) return;
+
+    pthread_mutex_lock(q->mutex);
+
+    queue_node_t *current = q->head;
+    while (current) {
+        queue_node_t *tmp = current->next;
+        destroy_queue_node(current, q->destructor);
+        current = tmp;
     }
 
+    pthread_mutex_unlock(q->mutex);
+}
+
+// Function is responsible for destroying a list.
+void destroy_queue(queue_t *q) {
+    empty(q);
     free(q);
 }
 
@@ -149,7 +156,7 @@ queue_node_t *create_queue_node(void *data, int size) {
 }
 
 // Function is responsible for destroying a list node.
-void destroy_queue_node(queue_node_t *node) {
-    free(node->data);
+void destroy_queue_node(queue_node_t *node, void (*destructor)(void *)) {
+    destructor(node->data);
     free(node);
 }

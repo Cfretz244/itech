@@ -5,7 +5,7 @@
 #include <pthread.h>
 #include "sock352.h"
 #include "array.h"
-#include "list.h"
+#include "queue.h"
 
 /*---- Private Constants -----*/
 
