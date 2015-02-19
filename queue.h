@@ -36,7 +36,13 @@ typedef struct queue {
 queue_t *create_queue(queue_type_t type, int max, void (*destructor)(void *));
 void enqueue(queue_t *q, void *data, int size);
 int dequeue(queue_t *q, void *buffer, int size);
+int peek(queue_t *q, void *buffer, int size);
+int peek_head(queue_t *q, void *buffer, int size);
+void replace(queue_t *q, void *data, int size);
+void replace_head(queue_t *q, void *data, int size);
 int drop(queue_t *q, void *buffer, int size);
+int caught_up(queue_t *q);
+int queue_head_data_size(queue_t *q);
 int queue_current_data_size(queue_t *q);
 void empty(queue_t *q);
 void destroy_queue(queue_t *q);

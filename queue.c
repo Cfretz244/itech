@@ -1,15 +1,18 @@
 #include "queue.h"
 
-/*----- List Functions -----*/
+/*----- Private Queue Function Declarations -----*/
+
+int peek_generic(queue_t *q, void *data, int size, queue_node_t *node);
+void replace_generic(queue_t *q, void *data, int size, queue_node_t *node);
+
+/*----- Queue Functions -----*/
 
 // Function is responsible for creating a queue struct.
 queue_t *create_queue(queue_type_t type, int max, void (*destructor)(void *)) {
     queue_t *q = (queue_t *) malloc(sizeof(queue_t));
 
     if (q) {
-        q->head = NULL;
-        q->current = q->head;
-        q->tail = q->head;
+        q->head = q->tail = q->current = NULL;
         q->type = type;
         q->mutex = malloc(sizeof(pthread_mutex_t));
         pthread_mutex_init(q->mutex, NULL);
@@ -43,6 +46,7 @@ void enqueue(queue_t *q, void *data, int size) {
     if (q->head) {
         q->tail->next = node;
         q->tail = node;
+        if (!q->current) q->current = node;
     } else {
         q->head = node;
         q->tail = node;
@@ -62,7 +66,7 @@ int dequeue(queue_t *q, void *buffer, int size) {
     int read;
     pthread_mutex_lock(q->mutex);
 
-    if (q->count == 0) pthread_cond_wait(q->empty, q->mutex);
+    if (q->count == 0 || !q->current) pthread_cond_wait(q->empty, q->mutex);
 
     // Pop data off the end of the queue and decrement count.
     queue_node_t *node = q->current;
@@ -87,6 +91,62 @@ int dequeue(queue_t *q, void *buffer, int size) {
     return read;
 }
 
+int peek(queue_t *q, void *data, int size) {
+    if (!q) return 0;
+
+    return peek_generic(q, data, size, q->current);
+}
+
+int peek_head(queue_t *q, void *data, int size) {
+    if (!q) return 0;
+
+    return peek_generic(q, data, size, q->head);
+}
+
+int peek_generic(queue_t *q, void *data, int size, queue_node_t *node) {
+    int read;
+    pthread_mutex_lock(q->mutex);
+
+    if (!node) pthread_cond_wait(q->empty, q->mutex);
+
+    if (node && size >= node->size) {
+        memcpy(data, node->data, node->size);
+    } else {
+        read = 0;
+    }
+
+    pthread_mutex_unlock(q->mutex);
+    return read;
+}
+
+void replace(queue_t *q, void *data, int size) {
+    if (!q) return;
+
+    replace_generic(q, data, size, q->current);
+}
+
+void replace_head(queue_t *q, void *data, int size) {
+    if (!q) return;
+
+    replace_generic(q, data, size, q->head);
+}
+
+void replace_generic(queue_t *q, void *data, int size, queue_node_t *node) {
+    pthread_mutex_lock(q->mutex);
+
+    if (node->size >= size) {
+        memcpy(node->data, data, size);
+        node->size = size;
+    } else {
+        free(node->data);
+        node->data = malloc(size);
+        memcpy(node->data, data, size);
+        node->size = size;
+    }
+
+    pthread_mutex_unlock(q->mutex);
+}
+
 int drop(queue_t *q, void *buffer, int size) {
     if (!q) return 0;
 
@@ -98,7 +158,7 @@ int drop(queue_t *q, void *buffer, int size) {
     q->head = node->next;
     if (q->current == node) q->current = node->next;
     int read = node->size;
-    memcpy(buffer, node->data, read);
+    if (buffer) memcpy(buffer, node->data, read);
     destroy_queue_node(node, q->destructor);
     q->count--;
     pthread_cond_signal(q->full);
@@ -108,7 +168,28 @@ int drop(queue_t *q, void *buffer, int size) {
     return read;
 }
 
+int caught_up(queue_t *q) {
+    if (!q) return 0;
+    pthread_mutex_lock(q->mutex);
+
+    int current = q->head == q->current;
+
+    pthread_mutex_unlock(q->mutex);
+    return current;
+}
+
+int queue_head_data_size(queue_t *q) {
+    if (!q) return 0;
+    pthread_mutex_lock(q->mutex);
+
+    int size = q->head->size;
+
+    pthread_mutex_unlock(q->mutex);
+    return size;
+}
+
 int queue_current_data_size(queue_t *q) {
+    if (!q) return 0;
     pthread_mutex_lock(q->mutex);
 
     int size = q->current->size;
@@ -128,6 +209,7 @@ void empty(queue_t *q) {
         destroy_queue_node(current, q->destructor);
         current = tmp;
     }
+    q->head = q->tail = q->current = NULL;
 
     pthread_mutex_unlock(q->mutex);
 }
@@ -148,8 +230,7 @@ queue_node_t *create_queue_node(void *data, int size) {
         node->data = malloc(size);
         memcpy(node->data, data, size);
         node->size = size;
-        node->next = NULL;
-        node->prev = NULL;
+        node->next = node->prev = NULL;
     }
 
     return node;
