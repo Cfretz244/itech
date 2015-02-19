@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <pthread.h>
+#include <sys/time.h>
 #include "sock352.h"
 #include "array.h"
 #include "queue.h"
@@ -25,17 +26,16 @@ typedef struct sock352_chunk {
     sock352_pkt_hdr_t header;
     void *data;
     int size;
+    struct timeval time;
 } sock352_chunk_t;
 
 typedef struct sock352_socket {
-    int fd, bound, should_halt, go_back;
+    int fd, bound, send_halt, recv_halt;
     uint64_t lseq_num, rseq_num, last_ack;
     sock352_types_t type;
     sockaddr_sock352_t laddr, raddr;
     queue_t *send_queue, *recv_queue;
     pthread_t *send_thread, *recv_thread;
-    pthread_mutex_t *send_mutex, *recv_mutex;
-    pthread_cond_t *signal;
     socklen_t len;
 } sock352_socket_t;
 
@@ -68,7 +68,7 @@ void setup_sockaddr(sockaddr_sock352_t *addr, struct sockaddr_in *udp_addr);
 
 /*----- Misc. Utility Function Declarations -----*/
 
-sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data, int size);
+sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data);
 void destroy_chunk(sock352_chunk_t *chunk);
 
 uint64_t htonll(uint64_t num);
@@ -171,7 +171,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     }
     socket->rseq_num++;
     socket->lseq_num++;
-    
+
     // Technically speaking it never received this ACK, but it makes the logic less complex later if I can
     // assume that the ACK counter should always be one more than the sequence number.
     socket->last_ack++;
@@ -202,7 +202,6 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         int e_count = 0, status = SOCK352_FAILURE;
         puts("Sock352_Accept: Waiting for initial SYN, fingers crossed...");
         sock352_pkt_hdr_t header;
-        memset(&header, 0, sizeof(header));
         status = recv_packet(&header, NULL, socket, 0, 1);
         while (!valid_packet(&header, NULL, SOCK352_SYN, socket) || status == SOCK352_FAILURE) {
             puts("Sock352_Accept: Received packet was invalid, trying again");
@@ -225,7 +224,6 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         // Receive ACK.
         int valid = 1;
         puts("Sock352_Accept: Waiting for ACK...");
-        memset(&header, 0, sizeof(header));
         status = recv_packet(&header, NULL, socket, 1, 0);
         while (!valid_packet(&header, NULL, SOCK352_SYN | SOCK352_ACK, socket) ||
                 !valid_ack(&header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
@@ -303,19 +301,11 @@ sock352_socket_t *create_352socket(int fd) {
     if (socket) {
         socket->fd = fd;
 
-        socket->send_queue = create_queue(KEEP, MAX_WINDOW_SIZE, (void (*)(void *)) destroy_chunk);
-        socket->recv_queue = create_queue(DUMP, MAX_WINDOW_SIZE, (void (*)(void *)) destroy_chunk);
+        socket->send_queue = create_queue(KEEP, MAX_WINDOW_SIZE);
+        socket->recv_queue = create_queue(DUMP, MAX_WINDOW_SIZE);
 
         socket->send_thread = malloc(sizeof(pthread_t));
         socket->recv_thread = malloc(sizeof(pthread_t));
-
-        socket->send_mutex = malloc(sizeof(pthread_mutex_t));
-        socket->recv_mutex = malloc(sizeof(pthread_mutex_t));
-        pthread_mutex_init(socket->send_mutex, NULL);
-        pthread_mutex_init(socket->recv_mutex, NULL);
-
-        socket->signal = malloc(sizeof(pthread_cond_t));
-        pthread_cond_init(socket->signal, NULL);
     }
 
     return socket;
@@ -338,6 +328,55 @@ sock352_socket_t *copysock(sock352_socket_t *socket) {
     return copy;
 }
 
+void *send_queue(void *sock) {
+    sock352_socket_t *socket = sock;
+
+    while (!socket->send_halt) {
+        sock352_chunk_t *chunk = dequeue(socket->send_queue);
+        sock352_pkt_hdr_t *header = &chunk->header;
+        void *data = chunk->data;
+        gettimeofday(&chunk->time, NULL);
+        send_packet(header, data, header->payload_len, socket);
+    }
+    socket->send_halt = 0;
+
+    return NULL;
+}
+
+void *recv_queue(void *sock) {
+    sock352_socket_t *socket = sock;
+    sock352_pkt_hdr_t header, resp_header;
+    char buffer[MAX_UDP_PACKET];
+
+    while (!socket->recv_halt) {
+        int status = recv_packet(&header, buffer, socket, 1, 0);
+        if (socket->type == SOCK352_CLIENT) {
+            if (valid_packet(&header, buffer, SOCK352_ACK, socket) && valid_ack(&header, socket->last_ack, 0) &&
+                    status != SOCK352_FAILURE) {
+                sock352_chunk_t *chunk = drop(socket->recv_queue);
+                while (chunk->header.sequence_no < header.ack_no) {
+                    destroy_chunk(chunk);
+                    chunk = drop(socket->recv_queue);
+                }
+                socket->last_ack = header.ack_no;
+            } else if (status == SOCK352_FAILURE) {
+                reset(socket->send_queue);
+            }
+        } else {
+            if (valid_packet(&header, buffer, 0, socket) && valid_sequence(&header, socket->rseq_num) &&
+                    status != SOCK352_FAILURE) {
+                sock352_chunk_t *chunk = create_chunk(&header, buffer);
+                enqueue(socket->recv_queue, chunk);
+                create_header(&resp_header, socket->lseq_num, header.sequence_no + 1, SOCK352_ACK, 0, 0);
+                send_packet(&resp_header, NULL, 0, socket);
+            }
+        }
+    }
+    socket->recv_halt = 0;
+
+    return NULL;
+}
+
 void destroy_352socket(sock352_socket_t *socket) {
     free(socket);
 }
@@ -345,29 +384,24 @@ void destroy_352socket(sock352_socket_t *socket) {
 /*----- Queue Manipulation Function Declarations -----*/
 
 void queue_send(queue_t *q, sock352_pkt_hdr_t *header, void *data) {
-    int header_size = sizeof(sock352_pkt_hdr_t);
-    char tmp[header_size + header->payload_len];
-    memcpy(tmp, header, header_size);
-    memcpy(tmp + header_size, data, header->payload_len);
-    enqueue(q, tmp, header_size + header->payload_len);
+    sock352_chunk_t *chunk = create_chunk(header, data);
+    enqueue(q, chunk);
 }
 
 int queue_recv(queue_t *q, void *data, int size) {
-    int required = queue_head_data_size(q), read, header_len = sizeof(sock352_pkt_hdr_t);
-    char tmp[required];
-    peek_head(q, tmp, required);
-    sock352_pkt_hdr_t *header = (sock352_pkt_hdr_t *) tmp;
+    int read;
+    sock352_chunk_t *chunk = peek(q);
+    sock352_pkt_hdr_t *header = &chunk->header;
 
     if (size >= header->payload_len) {
-        memcpy(data, tmp + header_len, header->payload_len);
+        memcpy(data, chunk->data, header->payload_len);
         read = header->payload_len;
-        drop(q, NULL, 0);
+        destroy_chunk(dequeue(q));
     } else {
         int difference = header->payload_len - size;
-        memcpy(data, tmp + header_len, size);
-        memcpy(tmp + header_len, tmp + header_len + size, difference);
+        memcpy(data, chunk->data, size);
+        memcpy(chunk->data, ((char *) chunk->data) + size, difference);
         header->payload_len = difference;
-        replace_head(q, tmp, header_len + difference);
         read = size;
     }
 
@@ -393,6 +427,7 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     int header_size = sizeof(sock352_pkt_hdr_t), status;
     struct sockaddr_in sender;
     socklen_t addr_len = sizeof(struct sockaddr_in);
+    memset(header, 0, sizeof(sock352_pkt_hdr_t));
 
     // Setup timeout structure.
     struct timeval time;
@@ -488,14 +523,14 @@ void setup_sockaddr(sockaddr_sock352_t *addr, struct sockaddr_in *udp_addr) {
 
 /*----- Misc. Utility Function Implementations -----*/
 
-sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data, int size) {
+sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data) {
     sock352_chunk_t *chunk = malloc(sizeof(sock352_chunk_t));
 
     if (chunk) {
         memcpy(&chunk->header, header, sizeof(sock352_pkt_hdr_t));
-        chunk->data = malloc(size);
-        memcpy(chunk->data, data, size);
-        chunk->size = size;
+        chunk->data = malloc(header->payload_len);
+        memcpy(chunk->data, data, header->payload_len);
+        chunk->size = header->payload_len;
     }
 
     return chunk;

@@ -2,13 +2,13 @@
 
 /*----- Private Queue Function Declarations -----*/
 
-int peek_generic(queue_t *q, void *data, int size, queue_node_t *node);
+void *peek_generic(queue_t *q, queue_node_t *node);
 void replace_generic(queue_t *q, void *data, int size, queue_node_t *node);
 
 /*----- Queue Functions -----*/
 
 // Function is responsible for creating a queue struct.
-queue_t *create_queue(queue_type_t type, int max, void (*destructor)(void *)) {
+queue_t *create_queue(queue_type_t type, int max) {
     queue_t *q = (queue_t *) malloc(sizeof(queue_t));
 
     if (q) {
@@ -23,13 +23,12 @@ queue_t *create_queue(queue_type_t type, int max, void (*destructor)(void *)) {
         q->count = 0;
         q->size = 0;
         q->max = max;
-        q->destructor = destructor;
     }
 
     return q;
 }
 
-void enqueue(queue_t *q, void *data, int size) {
+void enqueue(queue_t *q, void *data) {
     // Validate given parameters.
     if (!q || !data) {
         return;
@@ -42,7 +41,7 @@ void enqueue(queue_t *q, void *data, int size) {
     }
 
     // Push data into queue at tail and increment count.
-    queue_node_t *node = create_queue_node(data, size);
+    queue_node_t *node = create_queue_node(data);
     if (q->head) {
         q->tail->next = node;
         q->tail = node;
@@ -58,96 +57,56 @@ void enqueue(queue_t *q, void *data, int size) {
     pthread_mutex_unlock(q->mutex);
 }
 
-int dequeue(queue_t *q, void *buffer, int size) {
+void *dequeue(queue_t *q) {
     // Validate given parameters and return immediately if given
     // list is empty and not slated for multithreaded use.
     if (!q) return 0;
 
-    int read;
     pthread_mutex_lock(q->mutex);
 
     if (q->count == 0 || !q->current) pthread_cond_wait(q->empty, q->mutex);
 
     // Pop data off the end of the queue and decrement count.
     queue_node_t *node = q->current;
-    if (node->size <= size) {
-        read = node->size;
-        memcpy(buffer, node->data, read);
-        if (q->type == KEEP) {
-            q->current = node->next;
-        } else {
-            q->head = node->next;
-            q->current = node->next;
-            destroy_queue_node(node, q->destructor);
-            q->count--;
-            pthread_cond_signal(q->full);
-        }
+    void *data = node->data;
+    if (q->type == KEEP) {
+        q->current = node->next;
     } else {
-        read = 0;
+        q->head = node->next;
+        q->current = node->next;
+        free(node);
+        q->count--;
+        pthread_cond_signal(q->full);
     }
 
     pthread_mutex_unlock(q->mutex);
 
-    return read;
+    return data;
 }
 
-int peek(queue_t *q, void *data, int size) {
+void *peek(queue_t *q) {
     if (!q) return 0;
 
-    return peek_generic(q, data, size, q->current);
+    return peek_generic(q, q->current);
 }
 
-int peek_head(queue_t *q, void *data, int size) {
+void *peek_head(queue_t *q) {
     if (!q) return 0;
 
-    return peek_generic(q, data, size, q->head);
+    return peek_generic(q, q->head);
 }
 
-int peek_generic(queue_t *q, void *data, int size, queue_node_t *node) {
-    int read;
+void *peek_generic(queue_t *q, queue_node_t *node) {
     pthread_mutex_lock(q->mutex);
 
     if (!node) pthread_cond_wait(q->empty, q->mutex);
-
-    if (node && size >= node->size) {
-        memcpy(data, node->data, node->size);
-    } else {
-        read = 0;
-    }
+    void *data = node->data;
 
     pthread_mutex_unlock(q->mutex);
-    return read;
+    return data;
 }
 
-void replace(queue_t *q, void *data, int size) {
-    if (!q) return;
-
-    replace_generic(q, data, size, q->current);
-}
-
-void replace_head(queue_t *q, void *data, int size) {
-    if (!q) return;
-
-    replace_generic(q, data, size, q->head);
-}
-
-void replace_generic(queue_t *q, void *data, int size, queue_node_t *node) {
-    pthread_mutex_lock(q->mutex);
-
-    if (node->size >= size) {
-        memcpy(node->data, data, size);
-        node->size = size;
-    } else {
-        free(node->data);
-        node->data = malloc(size);
-        memcpy(node->data, data, size);
-        node->size = size;
-    }
-
-    pthread_mutex_unlock(q->mutex);
-}
-
-int drop(queue_t *q, void *buffer, int size) {
+void *drop(queue_t *q) {
     if (!q) return 0;
 
     pthread_mutex_lock(q->mutex);
@@ -155,17 +114,24 @@ int drop(queue_t *q, void *buffer, int size) {
     if (q->count == 0) pthread_cond_wait(q->empty, q->mutex);
 
     queue_node_t *node = q->head;
+    void *data = node->data;
     q->head = node->next;
     if (q->current == node) q->current = node->next;
-    int read = node->size;
-    if (buffer) memcpy(buffer, node->data, read);
-    destroy_queue_node(node, q->destructor);
+    free(node);
     q->count--;
     pthread_cond_signal(q->full);
 
     pthread_mutex_unlock(q->mutex);
 
-    return read;
+    return data;
+}
+
+void reset(queue_t *q) {
+    pthread_mutex_lock(q->mutex);
+
+    q->current = q->head;
+
+    pthread_mutex_lock(q->mutex);
 }
 
 int caught_up(queue_t *q) {
@@ -178,26 +144,6 @@ int caught_up(queue_t *q) {
     return current;
 }
 
-int queue_head_data_size(queue_t *q) {
-    if (!q) return 0;
-    pthread_mutex_lock(q->mutex);
-
-    int size = q->head->size;
-
-    pthread_mutex_unlock(q->mutex);
-    return size;
-}
-
-int queue_current_data_size(queue_t *q) {
-    if (!q) return 0;
-    pthread_mutex_lock(q->mutex);
-
-    int size = q->current->size;
-
-    pthread_mutex_unlock(q->mutex);
-    return size;
-}
-
 void empty(queue_t *q) {
     if (!q) return;
 
@@ -206,10 +152,11 @@ void empty(queue_t *q) {
     queue_node_t *current = q->head;
     while (current) {
         queue_node_t *tmp = current->next;
-        destroy_queue_node(current, q->destructor);
+        free(current);
         current = tmp;
     }
     q->head = q->tail = q->current = NULL;
+    pthread_cond_signal(q->full);
 
     pthread_mutex_unlock(q->mutex);
 }
@@ -223,21 +170,13 @@ void destroy_queue(queue_t *q) {
 /*----- List Node Functions -----*/
 
 // Function is responsible for creating a list node struct.
-queue_node_t *create_queue_node(void *data, int size) {
+queue_node_t *create_queue_node(void *data) {
     queue_node_t *node = malloc(sizeof(queue_node_t));
 
     if (node) {
-        node->data = malloc(size);
-        memcpy(node->data, data, size);
-        node->size = size;
+        node->data = data;
         node->next = node->prev = NULL;
     }
 
     return node;
-}
-
-// Function is responsible for destroying a list node.
-void destroy_queue_node(queue_node_t *node, void (*destructor)(void *)) {
-    destructor(node->data);
-    free(node);
 }
