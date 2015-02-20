@@ -10,10 +10,10 @@ CFLAGS = -I. -I./include -lm -g -lssl -lcrypto -O0 -pthread
 all: $(CLIENT) $(SERVER)
 
 $(CLIENT): $(LIB) client.c
-	$(CC) $(CFLAGS) -o client client.c $(LIB) $(ARRAY)
+	$(CC) $(CFLAGS) -o client client.c $(LIB) $(ARRAY) $(QUEUE)
 
 $(SERVER): $(LIB) server.c
-	$(CC) $(CFLAGS) -o server server.c $(LIB) $(ARRAY)
+	$(CC) $(CFLAGS) -o server server.c $(LIB) $(ARRAY) $(QUEUE)
 
 $(LIB): $(ARRAY) $(QUEUE) sock352.c sock352.h
 	$(CC) $(CFLAGS) -c sock352.c -o sock352.o
