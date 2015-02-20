@@ -52,7 +52,7 @@ void enqueue(queue_t *q, void *data) {
         q->current = node;
     }
     q->count++;
-    pthread_cond_signal(q->empty);
+    pthread_cond_broadcast(q->empty);
 
     pthread_mutex_unlock(q->mutex);
 }
@@ -76,7 +76,7 @@ void *dequeue(queue_t *q) {
         q->current = node->next;
         free(node);
         q->count--;
-        pthread_cond_signal(q->full);
+        pthread_cond_broadcast(q->full);
     }
 
     pthread_mutex_unlock(q->mutex);
@@ -119,7 +119,7 @@ void *drop(queue_t *q) {
     if (q->current == node) q->current = node->next;
     free(node);
     q->count--;
-    pthread_cond_signal(q->full);
+    pthread_cond_broadcast(q->full);
 
     pthread_mutex_unlock(q->mutex);
 
@@ -156,8 +156,19 @@ void empty(queue_t *q) {
         current = tmp;
     }
     q->head = q->tail = q->current = NULL;
-    pthread_cond_signal(q->full);
+    pthread_cond_broadcast(q->full);
 
+    pthread_mutex_unlock(q->mutex);
+}
+
+void block_on_empty(queue_t *q) {
+    if (!q) return;
+
+    pthread_mutex_lock(q->mutex);
+    while (q->size > 0) pthread_cond_wait(q->full, q->mutex);
+}
+
+void unblock(queue_t *q) {
     pthread_mutex_unlock(q->mutex);
 }
 

@@ -40,6 +40,8 @@ void *drop(queue_t *q);
 void reset(queue_t *q);
 int caught_up(queue_t *q);
 void empty(queue_t *q);
+void block_on_empty(queue_t *q);
+void unblock(queue_t *q);
 void destroy_queue(queue_t *q);
 
 /*----- Queue Node Functions -----*/
