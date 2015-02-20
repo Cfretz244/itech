@@ -2,7 +2,7 @@
 
 /*----- Private Queue Function Declarations -----*/
 
-void *peek_generic(queue_t *q, queue_node_t *node);
+void *peek_generic(queue_t *q, queue_type_t type);
 void replace_generic(queue_t *q, void *data, int size, queue_node_t *node);
 
 /*----- Queue Functions -----*/
@@ -88,20 +88,20 @@ void *dequeue(queue_t *q) {
 void *peek(queue_t *q) {
     if (!q) return 0;
 
-    return peek_generic(q, q->current);
+    return peek_generic(q, DUMP);
 }
 
 void *peek_head(queue_t *q) {
     if (!q) return 0;
 
-    return peek_generic(q, q->head);
+    return peek_generic(q, KEEP);
 }
 
-void *peek_generic(queue_t *q, queue_node_t *node) {
+void *peek_generic(queue_t *q, queue_type_t type) {
     pthread_mutex_lock(q->mutex);
 
-    if (!node) pthread_cond_wait(q->empty, q->mutex);
-    void *data = node->data;
+    if (q->count == 0) pthread_cond_wait(q->empty, q->mutex);
+    void *data = type == KEEP ? q->current->data : q->head->data;
 
     pthread_mutex_unlock(q->mutex);
     return data;
