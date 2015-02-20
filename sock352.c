@@ -472,7 +472,7 @@ void *recv_queue(void *sock) {
             }
         } else if (!socket->recv_halt) {
             puts("Recv_Queue: About to validate a packet...");
-            if (valid_packet(&header, buffer, 0, socket) && valid_sequence(&header, socket->rseq_num) && status != SOCK352_FAILURE) {
+            if (valid_packet(&header, buffer, 0, socket) && valid_sequence(&header, socket->rseq_num + 1) && status != SOCK352_FAILURE) {
                 puts("Recv_Queue: Received a valid data packet, sending ACK...");
                 sock352_chunk_t *chunk = create_chunk(&header, buffer);
                 enqueue(socket->recv_queue, chunk);
@@ -619,7 +619,7 @@ void encode_header(sock352_pkt_hdr_t *header) {
     header->checksum = htons(header->checksum);
     header->source_port = htonl(header->source_port);
     header->dest_port = htonl(header->dest_port);
-    header->sequence_no - htonll(header->sequence_no);
+    header->sequence_no = htonll(header->sequence_no);
     header->ack_no = htonll(header->ack_no);
     header->window = htonl(header->window);
     header->payload_len = htonl(header->payload_len);
