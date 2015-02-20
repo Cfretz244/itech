@@ -142,8 +142,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     sock352_pkt_hdr_t resp_header;
     puts("Sock352_Connect: Receiving SYN/ACK, cross your fingers...");
     status = recv_packet(&resp_header, NULL, socket, 1, 0);
-    while (!valid_packet(&resp_header, NULL, SOCK352_SYN | SOCK352_ACK, socket) ||
-            !valid_ack(&resp_header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
+    while (!valid_packet(&resp_header, NULL, SOCK352_SYN | SOCK352_ACK, socket) || !valid_ack(&resp_header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
         if (++e_count > 5) return SOCK352_FAILURE;
         printf("Sock352_Connect: Receive failure #%d...\n", e_count);
         send_packet(&header, NULL, 0, socket);
@@ -229,8 +228,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         int valid = 1;
         puts("Sock352_Accept: Waiting for ACK...");
         status = recv_packet(&header, NULL, socket, 1, 0);
-        while (!valid_packet(&header, NULL, SOCK352_SYN | SOCK352_ACK, socket) ||
-                !valid_ack(&header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
+        while (!valid_packet(&header, NULL, SOCK352_SYN | SOCK352_ACK, socket) || !valid_ack(&header, socket->lseq_num, 1) || status == SOCK352_FAILURE) {
             if (++e_count > 5) {
                 valid = 0;
                 break;
@@ -247,7 +245,6 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         if (valid) {
             int fd = fd_counter++;
             sock352_socket_t *copy = copysock(socket);
-            pthread_create(copy->send_thread, NULL, send_queue, copy);
             pthread_create(copy->recv_thread, NULL, recv_queue, copy);
             insert(sockets, fd, copy);
             puts("Sock352_Accept: CONNECTED!!!");
@@ -263,6 +260,7 @@ int sock352_read(int fd, void *buf, int count) {
     puts("Sock352_Read: Starting...");
 
     sock352_socket_t *socket = retrieve(sockets, fd);
+    puts("Sock352_Read: Attempting to dequeue a packet...");
     int read = queue_recv(socket->recv_queue, buf, count);
 
     return read;
@@ -284,6 +282,7 @@ int sock352_write(int fd, void *buf, int count) {
         sock352_pkt_hdr_t header;
         create_header(&header, socket->lseq_num++, socket->rseq_num + 1, 0, 0, current);
         queue_send(socket->send_queue, &header, ptr);
+        puts("Sock352_Write: Queued a packet to be sent...");
 
         ptr += current;
         remaining -= current;
@@ -296,20 +295,24 @@ int sock352_write(int fd, void *buf, int count) {
 int sock352_close(int fd) {
     sock352_socket_t *socket = retrieve(sockets, fd);
     int e_count = 0;
+    puts("Sock352_Close: Starting...");
 
     if (socket->type == SOCK352_CLIENT) {
         // We need to wait until the sending queue is empty, signifying that all data has been
         // successfully sent and ACKed. This line also leaves the sending thread blocked on its
         // dequeue call so that we know where it is in its execution, and can synchronize
         // properly.
+        puts("Sock352_Close: About to block to allow send queue to empty...");
         block_on_empty(socket->send_queue);
 
         // We also need to stop the receive thread to make sure it doesn't swallow up the ACK
         // for our FIN packet.
+        puts("Sock352_Close: About to block to allow receive queue to exit...");
         socket->recv_halt = 1;
         pthread_join(*socket->recv_thread, NULL);
 
         // Give the sending thread our FIN packet as a final packet to send after we unblock it.
+        puts("Sock352_Close: Queuing intial FIN packet...");
         sock352_pkt_hdr_t header, resp_header;
         create_header(&header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_FIN, 0, 0);
         queue_send(socket->send_queue, &header, NULL);
@@ -318,16 +321,18 @@ int sock352_close(int fd) {
         socket->send_halt = 1;
 
         // Unblock the sending thread so that it can send our FIN packet and exit.
+        puts("Sock352_Close: About to block to allow send queue to exit...");
         unblock(socket->send_queue);
         pthread_join(*socket->send_thread, NULL);
         empty(socket->send_queue);
 
         // Receive the ACK packet for our FIN.
+        puts("Sock352_Close: Receiving ACK...");
         int status = recv_packet(&resp_header, NULL, socket, 1, 0);
-        while (!valid_packet(&resp_header, NULL, SOCK352_ACK, socket) ||
-                !valid_ack(&resp_header, socket->last_ack, 1) || status == SOCK352_FAILURE) {
+        while (!valid_packet(&resp_header, NULL, SOCK352_ACK, socket) || !valid_ack(&resp_header, socket->last_ack, 1) || status == SOCK352_FAILURE) {
             if (++e_count > 5) return SOCK352_FAILURE;
             if (e_count == 1) encode_header(&header);
+            puts("Sock352_Close: ACK was invalid...");
             send_packet(&header, NULL, 0, socket);
             status = recv_packet(&resp_header, NULL, socket, 1, 0);
         }
@@ -336,16 +341,18 @@ int sock352_close(int fd) {
         socket->rseq_num = resp_header.sequence_no;
 
         // Wait on the server to send a FIN packet.
+        puts("Sock352_Close: Waiting on a FIN...");
         status = recv_packet(&header, NULL, socket, 0, 0);
-        while (!valid_packet(&header, NULL, SOCK352_FIN, socket) ||
-                !valid_sequence(&header, socket->rseq_num) || status == SOCK352_FAILURE) {
+        while (!valid_packet(&header, NULL, SOCK352_FIN, socket) || !valid_sequence(&header, socket->rseq_num) || status == SOCK352_FAILURE) {
             if (++e_count > 5) return SOCK352_FAILURE;
+            puts("Sock352_Close: FIN was invalid...");
             recv_packet(&header, NULL, socket, 0, 0);
         }
         e_count = 0;
         socket->rseq_num = header.sequence_no;
 
         // Send ACK in response to the server's FIN.
+        puts("Sock352_Close: Sending final ACK...");
         create_header(&header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
         encode_header(&header);
         status = send_packet(&header, NULL, 0, socket);
@@ -359,14 +366,18 @@ int sock352_close(int fd) {
         status = recv_packet(&resp_header, NULL, socket, 1, 0);
         while (status != SOCK352_FAILURE) {
             if (++e_count > 5) return SOCK352_FAILURE;
+            puts("Sock352_Close: Last ACK must have been lost, received another packet...");
             send_packet(&header, NULL, 0, socket);
             status = recv_packet(&resp_header, NULL, socket, 1, 0);
         }
 
+        puts("Sock352_Close: Connection Closed!");
         // Connection is closed!
         return SOCK352_SUCCESS;
     } else {
-
+        // Stop the receive thread so that it doesn't interfere with our closing the connection.
+        socket->recv_halt = 1;
+        pthread_join(*socket->recv_thread, NULL);
     }
 }
 
@@ -406,10 +417,13 @@ sock352_socket_t *copysock(sock352_socket_t *socket) {
 }
 
 void *send_queue(void *sock) {
+    puts("Send_Queue: Starting...");
     sock352_socket_t *socket = sock;
 
     while (!socket->send_halt) {
+        puts("Send_Queue: About to block to dequeue a packet...");
         sock352_chunk_t *chunk = dequeue(socket->send_queue);
+        puts("Send_Queue: Got a packet...");
         sock352_pkt_hdr_t header;
         memcpy(&header, &chunk->header, sizeof(sock352_pkt_hdr_t));
         int len = header.payload_len;
@@ -417,22 +431,26 @@ void *send_queue(void *sock) {
         void *data = chunk->data;
         gettimeofday(&chunk->time, NULL);
         send_packet(&header, data, len, socket);
+        puts("Send_Queue: Sent a packet...");
     }
     socket->send_halt = 0;
+    puts("Send_Queue: About to exit...");
 
     return NULL;
 }
 
 void *recv_queue(void *sock) {
+    puts("Recv_Queue: Starting...");
     sock352_socket_t *socket = sock;
     sock352_pkt_hdr_t header, resp_header;
     char buffer[MAX_UDP_PACKET];
 
     while (!socket->recv_halt) {
+        puts("Recv_Queue: About to block to receive a packet...");
         int status = recv_packet(&header, buffer, socket, 1, 0);
         if (socket->type == SOCK352_CLIENT && !socket->recv_halt) {
-            if (valid_packet(&header, buffer, SOCK352_ACK, socket) && valid_ack(&header, socket->last_ack, 0) &&
-                    status != SOCK352_FAILURE) {
+            if (valid_packet(&header, buffer, SOCK352_ACK, socket) && valid_ack(&header, socket->last_ack, 0) && status != SOCK352_FAILURE) {
+                puts("Recv_Queue: Received a valid ACK, clearing out send queue...");
                 sock352_chunk_t *chunk = drop(socket->recv_queue);
                 while (chunk->header.sequence_no < header.ack_no) {
                     destroy_chunk(chunk);
@@ -441,11 +459,12 @@ void *recv_queue(void *sock) {
                 socket->last_ack = header.ack_no;
                 socket->rseq_num = header.sequence_no;
             } else if (status == SOCK352_FAILURE) {
+                puts("Recv_Queue: Time out, resetting send queue...");
                 reset(socket->send_queue);
             }
         } else if (!socket->recv_halt) {
-            if (valid_packet(&header, buffer, 0, socket) && valid_sequence(&header, socket->rseq_num) &&
-                    status != SOCK352_FAILURE) {
+            if (valid_packet(&header, buffer, 0, socket) && valid_sequence(&header, socket->rseq_num) && status != SOCK352_FAILURE) {
+                puts("Recv_Queue: Received a valid data packet, sending ACK...");
                 sock352_chunk_t *chunk = create_chunk(&header, buffer);
                 enqueue(socket->recv_queue, chunk);
                 create_header(&resp_header, socket->lseq_num, header.sequence_no + 1, SOCK352_ACK, 0, 0);
@@ -455,6 +474,7 @@ void *recv_queue(void *sock) {
         }
     }
     socket->recv_halt = 0;
+    puts("Recv_Queue: Exiting...");
 
     return NULL;
 }

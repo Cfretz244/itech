@@ -230,7 +230,7 @@ int main(int argc, char *argv[]) {
 			end_of_file =1;   /* we got either zero bytes or and error, so finish the loop */
 		}
 	}
-	if ( sock352_close(fd) != SOCK352_SUCCESS) {
+	if ( sock352_close(dest_sock) != SOCK352_SUCCESS) {
 		printf("client: error with socket close \n");
 	}
 	gettimeofday(&end_time, (struct timezone *) NULL); /* end time-stamp */

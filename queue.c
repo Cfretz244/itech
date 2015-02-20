@@ -13,6 +13,9 @@ queue_t *create_queue(queue_type_t type, int max) {
 
     if (q) {
         q->head = q->tail = q->current = NULL;
+        q->count = 0;
+        q->max = max;
+        q->fresh = 1;
         q->type = type;
         q->mutex = malloc(sizeof(pthread_mutex_t));
         pthread_mutex_init(q->mutex, NULL);
@@ -20,9 +23,6 @@ queue_t *create_queue(queue_type_t type, int max) {
         q->empty = malloc(sizeof(pthread_cond_t));
         pthread_cond_init(q->full, NULL);
         pthread_cond_init(q->empty, NULL);
-        q->count = 0;
-        q->size = 0;
-        q->max = max;
     }
 
     return q;
@@ -52,6 +52,7 @@ void enqueue(queue_t *q, void *data) {
         q->current = node;
     }
     q->count++;
+    q->fresh = 0;
     pthread_cond_broadcast(q->empty);
 
     pthread_mutex_unlock(q->mutex);
@@ -165,7 +166,7 @@ void block_on_empty(queue_t *q) {
     if (!q) return;
 
     pthread_mutex_lock(q->mutex);
-    while (q->size > 0) pthread_cond_wait(q->full, q->mutex);
+    while (q->count > 0) pthread_cond_wait(q->full, q->mutex);
 }
 
 void unblock(queue_t *q) {

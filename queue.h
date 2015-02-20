@@ -23,7 +23,7 @@ typedef struct queue_node {
 
 typedef struct queue {
     queue_node_t *head, *tail, *current;
-    int count, size, max;
+    int count, max, fresh;
     queue_type_t type;
     pthread_mutex_t *mutex;
     pthread_cond_t *full, *empty;

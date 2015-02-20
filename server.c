@@ -220,7 +220,7 @@ int main(int argc, char *argv[]) {
 
 		/* make sure to clean up! */
 		close(file_fd);
-		close(connection_fd);
+		sock352_close(connection_fd);
 		close(listen_fd);
 
 		lapsed_useconds = lapsed_usec(&begin_time, &end_time);
