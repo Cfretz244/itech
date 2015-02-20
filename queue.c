@@ -88,13 +88,13 @@ void *dequeue(queue_t *q) {
 void *peek(queue_t *q) {
     if (!q) return 0;
 
-    return peek_generic(q, DUMP);
+    return peek_generic(q, KEEP);
 }
 
 void *peek_head(queue_t *q) {
     if (!q) return 0;
 
-    return peek_generic(q, KEEP);
+    return peek_generic(q, DUMP);
 }
 
 void *peek_generic(queue_t *q, queue_type_t type) {

@@ -151,7 +151,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     }
     puts("Sock352_Connect: Successfully received SYN/ACK!");
     e_count = 0;
-    socket->last_ack = header.ack_no;
+    socket->last_ack = resp_header.ack_no;
     socket->lseq_num++;
     socket->rseq_num = resp_header.sequence_no;
 
@@ -457,10 +457,11 @@ void *recv_queue(void *sock) {
             puts("Recv_Queue: About to validate a packet...");
             if (valid_packet(&header, buffer, SOCK352_ACK, socket) && valid_ack(&header, socket->last_ack, 0) && status != SOCK352_FAILURE) {
                 puts("Recv_Queue: Received a valid ACK, clearing out send queue...");
-                sock352_chunk_t *chunk = drop(socket->recv_queue);
+                sock352_chunk_t *chunk = peek_head(socket->send_queue);
                 while (chunk->header.sequence_no < header.ack_no) {
+                    drop(socket->send_queue);
                     destroy_chunk(chunk);
-                    chunk = drop(socket->recv_queue);
+                    chunk = peek_head(socket->send_queue);
                 }
                 socket->last_ack = header.ack_no;
                 socket->rseq_num = header.sequence_no;
@@ -588,7 +589,7 @@ int valid_sequence(sock352_pkt_hdr_t *header, int expected) {
 }
 
 int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact) {
-    printf("Valid_Ack: Expected ACK: %d...\n", expected);
+    printf("Valid_Ack: Expecting ACK to be larger than: %d...\n", expected);
     printf("Valid_ack: Received ACK: %d...\n", header->ack_no);
     if (exact) {
         return header->ack_no == expected + 1;
