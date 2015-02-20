@@ -34,13 +34,13 @@ typedef struct queue {
 queue_t *create_queue(queue_type_t type, int max);
 void enqueue(queue_t *q, void *data);
 void *dequeue(queue_t *q);
-void *peek(queue_t *q);
-void *peek_head(queue_t *q);
+void *peek(queue_t *q, int block);
+void *peek_head(queue_t *q, int block);
 void *drop(queue_t *q);
 void reset(queue_t *q);
 int caught_up(queue_t *q);
 void empty(queue_t *q);
-void block_on_empty(queue_t *q);
+void block_until_empty(queue_t *q);
 void unblock(queue_t *q);
 void destroy_queue(queue_t *q);
 

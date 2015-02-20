@@ -2,7 +2,7 @@
 
 /*----- Private Queue Function Declarations -----*/
 
-void *peek_generic(queue_t *q, queue_type_t type);
+void *peek_generic(queue_t *q, int block, queue_type_t type);
 void replace_generic(queue_t *q, void *data, int size, queue_node_t *node);
 
 /*----- Queue Functions -----*/
@@ -85,22 +85,29 @@ void *dequeue(queue_t *q) {
     return data;
 }
 
-void *peek(queue_t *q) {
+void *peek(queue_t *q, int block) {
     if (!q) return 0;
 
-    return peek_generic(q, KEEP);
+    return peek_generic(q, block, KEEP);
 }
 
-void *peek_head(queue_t *q) {
+void *peek_head(queue_t *q, int block) {
     if (!q) return 0;
 
-    return peek_generic(q, DUMP);
+    return peek_generic(q, block, DUMP);
 }
 
-void *peek_generic(queue_t *q, queue_type_t type) {
+void *peek_generic(queue_t *q, int block, queue_type_t type) {
     pthread_mutex_lock(q->mutex);
 
-    if (q->count == 0) pthread_cond_wait(q->empty, q->mutex);
+    if (q->count == 0) {
+        if (block) {
+            pthread_cond_wait(q->empty, q->mutex);
+        } else {
+            pthread_mutex_unlock(q->mutex);
+            return NULL;
+        }
+    }
     void *data = type == KEEP ? q->current->data : q->head->data;
 
     pthread_mutex_unlock(q->mutex);
@@ -133,7 +140,7 @@ void reset(queue_t *q) {
     q->current = q->head;
     pthread_cond_signal(q->empty);
 
-    pthread_mutex_lock(q->mutex);
+    pthread_mutex_unlock(q->mutex);
 }
 
 int caught_up(queue_t *q) {
@@ -163,14 +170,15 @@ void empty(queue_t *q) {
     pthread_mutex_unlock(q->mutex);
 }
 
-void block_on_empty(queue_t *q) {
-    if (!q) return;
-
+void block_until_empty(queue_t *q) {
     pthread_mutex_lock(q->mutex);
-    while (q->count > 0) pthread_cond_wait(q->full, q->mutex);
-}
 
-void unblock(queue_t *q) {
+    while (q->count > 0) {
+        puts("Block_Until_Empty: Check failed...");
+        pthread_cond_wait(q->full, q->mutex);
+    }
+    puts("Block_Until_Empty: It's empty!");
+
     pthread_mutex_unlock(q->mutex);
 }
 

@@ -301,12 +301,9 @@ int sock352_close(int fd) {
     puts("Sock352_Close: Starting...");
 
     if (socket->type == SOCK352_CLIENT) {
-        // We need to wait until the sending queue is empty, signifying that all data has been
-        // successfully sent and ACKed. This line also leaves the sending thread blocked on its
-        // dequeue call so that we know where it is in its execution, and can synchronize
-        // properly.
-        puts("Sock352_Close: About to block to allow send queue to empty...");
-        block_on_empty(socket->send_queue);
+        // Wait until sending queue is empty so that we know all data has been sent and ACKd.
+        puts("Sock352_Close: About to block to allow the send queue to empty...");
+        block_until_empty(socket->send_queue);
 
         // We also need to stop the receive thread to make sure it doesn't swallow up the ACK
         // for our FIN packet.
@@ -314,18 +311,16 @@ int sock352_close(int fd) {
         socket->recv_halt = 1;
         pthread_join(*socket->recv_thread, NULL);
 
-        // Give the sending thread our FIN packet as a final packet to send after we unblock it.
+        // Give the sending thread our FIN packet as a final packet, and set the halting
+        // flag.
         puts("Sock352_Close: Queuing intial FIN packet...");
         sock352_pkt_hdr_t header, resp_header;
         create_header(&header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_FIN, 0, 0);
+        socket->send_halt = 1;
         queue_send(socket->send_queue, &header, NULL);
 
-        // Set the halting flag so that the send_thread exits after sending our final packet.
-        socket->send_halt = 1;
-
-        // Unblock the sending thread so that it can send our FIN packet and exit.
+        // Join with the sending thread so that everything is cleaned up nicely.
         puts("Sock352_Close: About to block to allow send queue to exit...");
-        unblock(socket->send_queue);
         pthread_join(*socket->send_thread, NULL);
         empty(socket->send_queue);
 
@@ -457,16 +452,19 @@ void *recv_queue(void *sock) {
             puts("Recv_Queue: About to validate a packet...");
             if (valid_packet(&header, buffer, SOCK352_ACK, socket) && valid_ack(&header, socket->last_ack, 0) && status != SOCK352_FAILURE) {
                 puts("Recv_Queue: Received a valid ACK, clearing out send queue...");
-                sock352_chunk_t *chunk = peek_head(socket->send_queue);
-                while (chunk->header.sequence_no < header.ack_no) {
+                sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
+                while (chunk && chunk->header.sequence_no < header.ack_no) {
+                    puts("Recv_Queue: About to drop a packet from the send queue...");
                     drop(socket->send_queue);
                     destroy_chunk(chunk);
-                    chunk = peek_head(socket->send_queue);
+                    chunk = peek_head(socket->send_queue, 0);
                 }
+                printf("Recv_Queue: After clearing, length of queue is: %d\n", socket->send_queue->count);
                 socket->last_ack = header.ack_no;
                 socket->rseq_num = header.sequence_no;
             } else if (status == SOCK352_FAILURE) {
                 puts("Recv_Queue: Time out, resetting send queue...");
+                printf("Recv_Queue: Current length of the queue is: %d\n", socket->send_queue->count);
                 reset(socket->send_queue);
             } else {
                 puts("Recv_Queue: Packet was invalid...");
@@ -503,7 +501,7 @@ void queue_send(queue_t *q, sock352_pkt_hdr_t *header, void *data) {
 
 int queue_recv(queue_t *q, void *data, int size) {
     int read;
-    sock352_chunk_t *chunk = peek(q);
+    sock352_chunk_t *chunk = peek(q, 1);
     sock352_pkt_hdr_t *header = &chunk->header;
 
     if (size >= header->payload_len) {
