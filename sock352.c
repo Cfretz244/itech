@@ -63,6 +63,7 @@ int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact);
 /*----- Header Manipulation Function Declarations -----*/
 
 void create_header(sock352_pkt_hdr_t *header, int sequence_num, int ack_num, uint8_t flags, uint16_t checksum, uint32_t len);
+void encode_header(sock352_pkt_hdr_t *header);
 void decode_header(sock352_pkt_hdr_t *header);
 void setup_sockaddr(sockaddr_sock352_t *addr, struct sockaddr_in *udp_addr);
 
@@ -133,6 +134,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     puts("Sock352_Connect: Sending SYN packet...");
     sock352_pkt_hdr_t header;
     create_header(&header, socket->lseq_num, 0, SOCK352_SYN, 0, 0);
+    encode_header(&header);
     status = send_packet(&header, NULL, 0, socket);
     if (status < 0) return SOCK352_FAILURE;
 
@@ -156,6 +158,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     // Send ACK.
     puts("Sock352_Connect: Sending ACK...");
     create_header(&header, socket->lseq_num, socket->rseq_num + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
+    encode_header(&header);
     do {
         status = send_packet(&header, NULL, 0, socket);
         if (++e_count > 5) return SOCK352_FAILURE;
@@ -213,6 +216,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         // Send SYN/ACK.
         sock352_pkt_hdr_t resp_header;
         create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
+        encode_header(&resp_header);
         puts("Sock352_Accept: Sending SYN/ACK...");
         do {
             status = send_packet(&resp_header, NULL, 0, socket);
@@ -333,10 +337,12 @@ void *send_queue(void *sock) {
 
     while (!socket->send_halt) {
         sock352_chunk_t *chunk = dequeue(socket->send_queue);
-        sock352_pkt_hdr_t *header = &chunk->header;
+        sock352_pkt_hdr_t header;
+        memcpy(&header, &chunk->header, sizeof(sock352_pkt_hdr_t));
+        encode_header(&header);
         void *data = chunk->data;
         gettimeofday(&chunk->time, NULL);
-        send_packet(header, data, header->payload_len, socket);
+        send_packet(&header, data, header.payload_len, socket);
     }
     socket->send_halt = 0;
 
@@ -368,6 +374,7 @@ void *recv_queue(void *sock) {
                 sock352_chunk_t *chunk = create_chunk(&header, buffer);
                 enqueue(socket->recv_queue, chunk);
                 create_header(&resp_header, socket->lseq_num, header.sequence_no + 1, SOCK352_ACK, 0, 0);
+                encode_header(&resp_header);
                 send_packet(&resp_header, NULL, 0, socket);
             }
         }
@@ -493,14 +500,25 @@ void create_header(sock352_pkt_hdr_t *header, int sequence_num, int ack_num, uin
     header->version = SOCK352_VER_1;
     header->flags = flags;
     header->protocol = 0;
-    header->header_len = htons(sizeof(header));
-    header->checksum = htons(checksum);
-    header->source_port = htonl(0);
-    header->dest_port = htonl(0);
-    header->sequence_no = htonll(sequence_num);
-    header->ack_no = htonll(ack_num);
-    header->window = htonl(MAX_WINDOW_SIZE);
-    header->payload_len = htonl(len);
+    header->header_len = sizeof(header);
+    header->checksum = checksum;
+    header->source_port = 0;
+    header->dest_port = 0;
+    header->sequence_no = sequence_num;
+    header->ack_no = ack_num;
+    header->window = MAX_WINDOW_SIZE;
+    header->payload_len = len;
+}
+
+void encode_header(sock352_pkt_hdr_t *header) {
+    header->header_len = htons(header->header_len);
+    header->checksum = htons(header->checksum);
+    header->source_port = htonl(header->source_port);
+    header->dest_port = htonl(header->dest_port);
+    header->sequence_no - htonll(header->sequence_no);
+    header->ack_no = htonll(header->ack_no);
+    header->window = htonl(header->window);
+    header->payload_len = htonl(header->payload_len);
 }
 
 void decode_header(sock352_pkt_hdr_t *header) {
