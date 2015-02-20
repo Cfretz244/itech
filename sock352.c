@@ -474,9 +474,10 @@ void *recv_queue(void *sock) {
             puts("Recv_Queue: About to validate a packet...");
             if (valid_packet(&header, buffer, 0, socket) && valid_sequence(&header, socket->rseq_num + 1) && status != SOCK352_FAILURE) {
                 puts("Recv_Queue: Received a valid data packet, sending ACK...");
+                socket->rseq_num = header.sequence_no;
                 sock352_chunk_t *chunk = create_chunk(&header, buffer);
                 enqueue(socket->recv_queue, chunk);
-                create_header(&resp_header, socket->lseq_num, header.sequence_no + 1, SOCK352_ACK, 0, 0);
+                create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
                 encode_header(&resp_header);
                 send_packet(&resp_header, NULL, 0, socket);
             }
