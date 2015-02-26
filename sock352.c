@@ -319,7 +319,7 @@ int sock352_close(int fd) {
         puts("Sock352_Close: Receiving ACK...");
         status = recv_packet(&resp_header, NULL, socket, 1, 0);
         puts("Sock352_Close: About to validate a packet...");
-        while (!valid_packet(&resp_header, NULL, SOCK352_ACK) || !valid_ack(&resp_header, socket->last_ack, 1) || status == SOCK352_FAILURE) {
+        while (!valid_packet(&resp_header, NULL, SOCK352_ACK) || !valid_ack(&resp_header, socket->last_ack, 0) || status == SOCK352_FAILURE) {
             if (++e_count > 5) return SOCK352_FAILURE;
             if (e_count == 1) encode_header(&header);
             puts("Sock352_Close: ACK was invalid...");
@@ -334,7 +334,7 @@ int sock352_close(int fd) {
         puts("Sock352_Close: Waiting on a FIN...");
         status = recv_packet(&header, NULL, socket, 0, 0);
         puts("Sock352_Close: About to validate a packet...");
-        while (!valid_packet(&header, NULL, SOCK352_FIN) || !valid_sequence(&header, socket->rseq_num) || status == SOCK352_FAILURE) {
+        while (!valid_packet(&header, NULL, SOCK352_FIN) || !valid_sequence(&header, socket->rseq_num + 1) || status == SOCK352_FAILURE) {
             if (++e_count > 5) return SOCK352_FAILURE;
             puts("Sock352_Close: FIN was invalid...");
             recv_packet(&header, NULL, socket, 0, 0);
