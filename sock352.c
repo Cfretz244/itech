@@ -11,7 +11,7 @@
 /*---- Private Constants -----*/
 
 #define MAX_UDP_PACKET 65535
-#define MAX_WINDOW_SIZE 1024
+#define MAX_WINDOW_SIZE 8
 #define RECEIVE_TIMEOUT 200
 
 /*----- Private Struct Declarations -----*/
