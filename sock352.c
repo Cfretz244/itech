@@ -374,7 +374,7 @@ int sock352_close(int fd) {
 
             // Receive the FIN.
             recv_packet(&header, NULL, socket, 0, 0);
-            while (!valid_packet(&header, NULL, SOCK352_FIN) || !valid_sequence(&header, socket->rseq_num + 1) || status != SOCK352_FAILURE) {
+            while (!valid_packet(&header, NULL, SOCK352_FIN) || !valid_sequence(&header, socket->rseq_num + 1) || status == SOCK352_FAILURE) {
                 if (++e_count > 5) return SOCK352_FAILURE;
                 printf("Sock352_Close: Receive failure #%d...\n", e_count);
                 recv_packet(&header, NULL, socket, 0, 0);
@@ -385,12 +385,23 @@ int sock352_close(int fd) {
 
             // Send an ACK for the FIN.
             create_header(&resp_header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
-            encode_header(&header);
+            encode_header(&resp_header);
             send_packet(&resp_header, NULL, 0, socket);
+
+            // Make sure ACK was received.
+            puts("Sock352_Close: Making sure ACK was received...");
+            status = recv_packet(&header, NULL, socket, 1, 0);
+            while (status != SOCK352_FAILURE) {
+                if (++e_count > 5) return SOCK352_FAILURE;
+                printf("Sock352_Close: ACK was not received. Try #%d...\n", e_count);
+                send_packet(&resp_header, NULL, 0, socket);
+                status = recv_packet(&resp_header, NULL, socket, 1, 0);
+            }
+            e_count = 0;
         }
 
         // Send FIN to client.
-        puts("Sock352_Close: Sending ACK to client...");
+        puts("Sock352_Close: Sending FIN to client...");
         create_header(&header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_FIN, 0, 0);
         encode_header(&header);
         send_packet(&header, NULL, 0, socket);
@@ -398,7 +409,7 @@ int sock352_close(int fd) {
         // Receive ACK from client.
         puts("Sock352_Close: Receiving ACK...");
         status = recv_packet(&resp_header, NULL, socket, 1, 0);
-        while (!valid_packet(&resp_header, NULL, SOCK352_ACK) || !valid_ack(&resp_header, socket->last_ack, 1) || status == SOCK352_FAILURE) {
+        while (!valid_packet(&resp_header, NULL, SOCK352_ACK) || !valid_ack(&resp_header, socket->last_ack, 0) || status == SOCK352_FAILURE) {
             if (++e_count > 5) return SOCK352_FAILURE;
             puts("Sock352_Close: ACK was invalid...");
             send_packet(&header, NULL, 0, socket);
