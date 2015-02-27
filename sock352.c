@@ -23,6 +23,7 @@ typedef enum sock352_types {
     SOCK352_CLIENT
 } sock352_types_t;
 
+// Struct represents a packet to be sent, acknowledged, or read.
 typedef struct sock352_chunk {
     sock352_pkt_hdr_t header;
     void *data;
@@ -30,6 +31,7 @@ typedef struct sock352_chunk {
     struct timeval time;
 } sock352_chunk_t;
 
+// Struct maintains state for a single connection.
 typedef struct sock352_socket {
     int fd, bound, send_halt, recv_halt, lfin, rfin;
     uint64_t lseq_num, rseq_num, last_ack;
@@ -84,6 +86,7 @@ array *sockets;
 
 /*----- Socket API Function Implementations -----*/
 
+// Function is responsible for initializing the library.
 int sock352_init(int udp_port) {
     if (udp_port <= 0 || uport >= 0) return SOCK352_FAILURE;
 
@@ -91,6 +94,7 @@ int sock352_init(int udp_port) {
     sockets = create_array();
 }
 
+// Function is responsible for returning a socket for the given configuration.
 int sock352_socket(int domain, int type, int protocol) {
     if (domain != AF_CS352 || type != SOCK_STREAM || protocol != 0) {
         return SOCK352_FAILURE;
@@ -104,6 +108,7 @@ int sock352_socket(int domain, int type, int protocol) {
     return fd_352;
 }
 
+// Function is responsible for binding to the given local port.
 int sock352_bind(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     sock352_socket_t *socket = retrieve(sockets, fd);
     memcpy(&socket->laddr, addr, sizeof(sockaddr_sock352_t));
@@ -113,6 +118,7 @@ int sock352_bind(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     return bind(socket->fd, (struct sockaddr *) &udp_addr, len);
 }
 
+// Function is responsible for the client's half of the 3 way TCP connection handshake.
 int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     int e_count = 0;
     sock352_socket_t *socket = retrieve(sockets, fd);
@@ -163,13 +169,15 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     // assume that the ACK counter should always be one more than the sequence number.
     socket->last_ack++;
 
+    // Start send and receive queue threads.
     pthread_create(socket->send_thread, NULL, send_queue, socket);
     pthread_create(socket->recv_thread, NULL, recv_queue, socket);
 
-    // Praise the gods!
+    // Connected!
     return SOCK352_SUCCESS;
 }
 
+// Function doesn't do much right now. Just marks the socket as a listening socket.
 int sock352_listen(int fd, int n) {
 
     sock352_socket_t *socket = retrieve(sockets, fd);
@@ -178,6 +186,7 @@ int sock352_listen(int fd, int n) {
     return SOCK352_SUCCESS;
 }
 
+// Function is responsible for the server's half of the TCP 3-way handshake.
 int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
     sock352_socket_t *socket = retrieve(sockets, _fd);
 
@@ -214,6 +223,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
 
         // Either return new socket for connection, or give up and start over.
         if (valid) {
+            // Connected!
             int fd = fd_counter++;
             sock352_socket_t *copy = copysock(socket);
             copy->type = SOCK352_ACCEPT;
@@ -224,33 +234,41 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
     }
 }
 
+// Function is responsible for dequeuing a received packet, or blocking until one arrives.
 int sock352_read(int fd, void *buf, int count) {
     if (count <= 0 || !buf) {
         return 0;
     }
 
+    // Get the socket, then get the data.
     sock352_socket_t *socket = retrieve(sockets, fd);
+    if (!socket) return SOCK352_FAILURE;
     int read = queue_recv(socket->recv_queue, buf, count);
 
     return read;
 }
 
+// Function is responsible for breaking up the given data into packet sized chunks, and enqueuing it to be sent.
 int sock352_write(int fd, void *buf, int count) {
     if (count <= 0 || !buf) {
         return 0;
     }
 
+    // Get the socket and set up some initial state.
     sock352_socket_t *socket = retrieve(sockets, fd);
     if (!socket) return SOCK352_FAILURE;
     int current = count, remaining = count;
     char *ptr = buf;
+
     while (remaining > 0) {
         if (current > MAX_UDP_PACKET) current = MAX_UDP_PACKET;
 
+        // Create the header and enqueue it with the data.
         sock352_pkt_hdr_t header;
         create_header(&header, socket->lseq_num++, socket->rseq_num + 1, 0, 0, current);
         queue_send(socket->send_queue, &header, ptr);
 
+        // Increase our counters.
         ptr += current;
         remaining -= current;
         current = remaining;
@@ -259,6 +277,7 @@ int sock352_write(int fd, void *buf, int count) {
     return count;
 }
 
+// Function is responsible for handling the 4-way TCP closing handshake.
 int sock352_close(int fd) {
     sock352_socket_t *socket = retrieve(sockets, fd);
     int e_count = 0, status;
@@ -318,6 +337,7 @@ int sock352_close(int fd) {
         }
 
         // Connection is closed!
+        destroy_352socket(socket);
         return SOCK352_SUCCESS;
     } else if (socket->type == SOCK352_ACCEPT) {
         // Stop the receive thread so that it doesn't interfere with our closing the connection.
@@ -366,9 +386,13 @@ int sock352_close(int fd) {
             status = recv_packet(&resp_header, NULL, socket, 1, 0);
         }
 
+        destroy_352socket(socket);
+
         // Connection is closed!
         return SOCK352_SUCCESS;
     } else if (socket->type == SOCK352_LISTEN) {
+        destroy_352socket(socket);
+
         return SOCK352_SUCCESS;
     } else {
         return SOCK352_FAILURE;
@@ -377,6 +401,7 @@ int sock352_close(int fd) {
 
 /*----- Socket Manipulation Function Implementations -----*/
 
+// Function is responsible for allocating and initializing a socket.
 sock352_socket_t *create_352socket(int fd) {
     sock352_socket_t *socket = calloc(1, sizeof(sock352_socket_t));
 
@@ -393,6 +418,7 @@ sock352_socket_t *create_352socket(int fd) {
     return socket;
 }
 
+// Function is responsible for duplicating a socket.
 sock352_socket_t *copysock(sock352_socket_t *socket) {
     sock352_socket_t *copy = create_352socket(socket->fd);
 
@@ -410,6 +436,16 @@ sock352_socket_t *copysock(sock352_socket_t *socket) {
     return copy;
 }
 
+// Function is responsible for destroying a socket.
+void destroy_352socket(sock352_socket_t *socket) {
+    destroy_queue(socket->send_queue);
+    destroy_queue(socket->recv_queue);
+    free(socket->send_thread);
+    free(socket->recv_thread);
+    free(socket);
+}
+
+// Function is responsible for sending any packets in the send queue.
 void *send_queue(void *sock) {
     sock352_socket_t *socket = sock;
 
@@ -428,6 +464,8 @@ void *send_queue(void *sock) {
     return NULL;
 }
 
+// Function does double duty. On the client side, it handles receiving ACKS and rewinding the queue on a timeout,
+// and on the server side it handles sending ACKs.
 void *recv_queue(void *sock) {
     sock352_socket_t *socket = sock;
     sock352_pkt_hdr_t header, resp_header;
@@ -435,25 +473,37 @@ void *recv_queue(void *sock) {
 
     while (!socket->recv_halt) {
         int status = recv_packet(&header, buffer, socket, 1, 0);
+
         if (socket->type == SOCK352_CLIENT && !socket->recv_halt) {
             if (valid_packet(&header, buffer, SOCK352_ACK) && valid_ack(&header, socket->last_ack, 0) && status != SOCK352_FAILURE) {
+                // We've received a valid ACK! Time to remove all corresponding packets (at least one, maybe more) from the yet-to-be-acknowledged part of
+                // the send queue.
                 sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
+
+                // Keep dropping packets from the unacknowledged, but sent, end of the queue until we reach the ACK number.
                 while (chunk && chunk->header.sequence_no < header.ack_no) {
                     drop(socket->send_queue);
                     destroy_chunk(chunk);
                     chunk = peek_head(socket->send_queue, 0);
                 }
+
+                // Update our last_ack and remote sequence numbers.
                 socket->last_ack = header.ack_no;
                 socket->rseq_num = header.sequence_no;
             } else if (status == SOCK352_FAILURE) {
+                // We've had a timeout, so reset the current pointer on the send queue back to the first unacknowledged packet.
                 reset(socket->send_queue);
-            } else {
             }
         } else if (!socket->recv_halt) {
+            // Check if the data packet we received is the correct sequence. The valid_packet call doesn't really do too much here as we haven't added checksum
+            // checking yet.
             if ((valid_packet(&header, buffer, 0) || valid_packet(&header, buffer, SOCK352_FIN)) && valid_sequence(&header, socket->rseq_num + 1) && status != SOCK352_FAILURE) {
                 if (header.flags == SOCK352_FIN) {
+                    // We have a FIN packet. Mark that the remote host is finished.
                     socket->rfin = 1;
                 }
+
+                // The packet was valid! Enqueue its data into the receive queue and send back an ACK.
                 socket->rseq_num = header.sequence_no;
                 sock352_chunk_t *chunk = create_chunk(&header, buffer);
                 enqueue(socket->recv_queue, chunk);
@@ -468,17 +518,15 @@ void *recv_queue(void *sock) {
     return NULL;
 }
 
-void destroy_352socket(sock352_socket_t *socket) {
-    free(socket);
-}
-
 /*----- Queue Manipulation Function Declarations -----*/
 
+// Function is responsible for wrapping a packet into a chunk, and enqueuing it for sending.
 void queue_send(queue_t *q, sock352_pkt_hdr_t *header, void *data) {
     sock352_chunk_t *chunk = create_chunk(header, data);
     enqueue(q, chunk);
 }
 
+// Function is responsible for dequeuing received data, or blocking until there is some.
 int queue_recv(queue_t *q, void *data, int size) {
     int read;
     sock352_chunk_t *chunk = peek(q, 1);
@@ -501,18 +549,22 @@ int queue_recv(queue_t *q, void *data, int size) {
 
 /*----- Packet Manipulation Function Implementations -----*/
 
+// Function is responsible for actually sending the given header and data.
 int send_packet(sock352_pkt_hdr_t *header, void *data, int nbytes, sock352_socket_t *socket) {
     struct sockaddr_in udp_addr;
     setup_sockaddr(&socket->raddr, &udp_addr);
     char packet[sizeof(sock352_pkt_hdr_t) + nbytes];
 
+    // Copy the data into the buffer.
     memcpy(packet, header, sizeof(sock352_pkt_hdr_t));
     if (data) memcpy(packet + sizeof(sock352_pkt_hdr_t), data, nbytes);
     int num_bytes = data ? sizeof(packet) : sizeof(sock352_pkt_hdr_t);
 
+    // Send the data.
     return sendto(socket->fd, packet, num_bytes, 0, (struct sockaddr *) &udp_addr, sizeof(udp_addr));
 }
 
+// Function is responsible for receiving a packet into the given header and buffer.
 int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket, int timeout, int save_addr) {
     char response[MAX_UDP_PACKET];
     int header_size = sizeof(sock352_pkt_hdr_t), status;
@@ -525,25 +577,34 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     time.tv_sec = 0;
     time.tv_usec = RECEIVE_TIMEOUT;
 
+    // Set up the file descriptor set for the select call.
     fd_set to_read;
     FD_ZERO(&to_read);
     FD_SET(socket->fd, &to_read);
+
+    // Wait (or not) until the data is ready.
     if (timeout) {
         if (timeout != 1) time.tv_usec = timeout * 1000;
         status = select(socket->fd + 1, &to_read, NULL, NULL, &time);
     } else {
         status = select(socket->fd + 1, &to_read, NULL, NULL, NULL);
     }
+
+    // Receive the data, or return a failure.
     if (FD_ISSET(socket->fd, &to_read)) {
         recvfrom(socket->fd, response, sizeof(response), 0, (struct sockaddr *) &sender, &addr_len);
     } else {
         return SOCK352_FAILURE;
     }
+    
+    // This is ugly, but when the server first receives data, it needs to save the address of the host that sent it,
+    // which gets done here.
     if (save_addr) {
         socket->raddr.sin_port = sender.sin_port;
         socket->raddr.sin_addr = sender.sin_addr;
     }
 
+    // Copy data the received data into the provided buffers.
     memcpy(header, response, sizeof(sock352_pkt_hdr_t));
     decode_header(header);
     if (data) memcpy(data, response + header_size, header->payload_len);
@@ -551,6 +612,7 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     return SOCK352_SUCCESS;
 }
 
+// Function is responsible for checking if the packet is valid. Currently only checks flags.
 int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags) {
     int flag_check = header->flags == flags;
 
@@ -559,10 +621,12 @@ int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags) {
     return flag_check && sum_check;
 }
 
+// Function is responsible for checking if the received packet has the correct sequence number.
 int valid_sequence(sock352_pkt_hdr_t *header, int expected) {
     return header->sequence_no == expected;
 }
 
+// Function checks if the received packet has the correct ACK number.
 int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact) {
     if (exact) {
         return header->ack_no == expected + 1;
@@ -573,6 +637,7 @@ int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact) {
 
 /*----- Header Manipulation Function Implementations -----*/
 
+// Function is responsible for creating a header with the given properties.
 void create_header(sock352_pkt_hdr_t *header, int sequence_num, int ack_num, uint8_t flags, uint16_t checksum, uint32_t len) {
     memset(header, 0, sizeof(header));
     header->version = SOCK352_VER_1;
@@ -588,6 +653,7 @@ void create_header(sock352_pkt_hdr_t *header, int sequence_num, int ack_num, uin
     header->payload_len = len;
 }
 
+// Function is responsible for encoding a header to be sent over the network.
 void encode_header(sock352_pkt_hdr_t *header) {
     header->header_len = htons(header->header_len);
     header->checksum = htons(header->checksum);
@@ -599,6 +665,7 @@ void encode_header(sock352_pkt_hdr_t *header) {
     header->payload_len = htonl(header->payload_len);
 }
 
+// Function is responsible for decoding a header that was received over the network for reading.
 void decode_header(sock352_pkt_hdr_t *header) {
     header->header_len = ntohs(header->header_len);
     header->checksum = ntohs(header->checksum);
@@ -610,6 +677,8 @@ void decode_header(sock352_pkt_hdr_t *header) {
     header->payload_len = ntohl(header->payload_len);
 }
 
+// Function is responsible for configuing a given sockaddr_in structure with the same properties as the given
+// sockaddr_sock352_t struct.
 void setup_sockaddr(sockaddr_sock352_t *addr, struct sockaddr_in *udp_addr) {
     memset(udp_addr, 0, sizeof(struct sockaddr_in));
     udp_addr->sin_family = AF_INET;
@@ -619,6 +688,7 @@ void setup_sockaddr(sockaddr_sock352_t *addr, struct sockaddr_in *udp_addr) {
 
 /*----- Misc. Utility Function Implementations -----*/
 
+// Function is responsible for creating a chunk struct.
 sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data) {
     sock352_chunk_t *chunk = malloc(sizeof(sock352_chunk_t));
 
@@ -632,11 +702,13 @@ sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data) {
     return chunk;
 }
 
+// Function is responsible for destroying a chunk struct.
 void destroy_chunk(sock352_chunk_t *chunk) {
     free(chunk->data);
     free(chunk);
 }
 
+// Function is responsible for rearranging 8 bytes of data into network format.
 uint64_t htonll(uint64_t num) {
     if (endian_check()) {
         uint32_t *f_half = (uint32_t *) &num, tmp;
@@ -650,10 +722,12 @@ uint64_t htonll(uint64_t num) {
     return num;
 }
 
+// Function is responsible for rearranging 8 bytes of data to local format.
 uint64_t ntohll(uint64_t num) {
     return htonll(num);
 }
 
+// Function is responsible for discerning if the current machine is little endian.
 int endian_check() {
     int num = 42;
     return *((char *) &num) == 42;
