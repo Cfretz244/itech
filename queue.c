@@ -174,10 +174,8 @@ void block_until_empty(queue_t *q) {
     pthread_mutex_lock(q->mutex);
 
     while (q->count > 0) {
-        puts("Block_Until_Empty: Check failed...");
         pthread_cond_wait(q->full, q->mutex);
     }
-    puts("Block_Until_Empty: It's empty!");
 
     pthread_mutex_unlock(q->mutex);
 }
