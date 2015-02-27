@@ -12,7 +12,7 @@
 
 #define MAX_UDP_PACKET 65535
 #define MAX_WINDOW_SIZE 8
-#define RECEIVE_TIMEOUT 200
+#define RECEIVE_TIMEOUT 200000
 
 /*----- Private Struct Declarations -----*/
 
@@ -588,7 +588,7 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     // Setup timeout structure.
     struct timeval time;
     time.tv_sec = 0;
-    time.tv_usec = 200000;
+    time.tv_usec = RECEIVE_TIMEOUT;
 
     fd_set to_read;
     FD_ZERO(&to_read);
