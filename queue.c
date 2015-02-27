@@ -65,7 +65,7 @@ void *dequeue(queue_t *q) {
 
     pthread_mutex_lock(q->mutex);
 
-    if (q->count == 0 || !q->current) pthread_cond_wait(q->empty, q->mutex);
+    while (q->count == 0 || !q->current) pthread_cond_wait(q->empty, q->mutex);
 
     // Pop data off the end of the queue and decrement count.
     queue_node_t *node = q->current;
