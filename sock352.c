@@ -18,7 +18,8 @@
 
 typedef enum sock352_types {
     SOCK352_UNSET,
-    SOCK352_SERVER,
+    SOCK352_LISTEN,
+    SOCK352_ACCEPT,
     SOCK352_CLIENT
 } sock352_types_t;
 
@@ -187,7 +188,7 @@ int sock352_listen(int fd, int n) {
     puts("Sock352_Listen: Starting...");
 
     sock352_socket_t *socket = retrieve(sockets, fd);
-    socket->type = SOCK352_SERVER;
+    socket->type = SOCK352_LISTEN;
 
     return SOCK352_SUCCESS;
 }
@@ -239,6 +240,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         if (valid) {
             int fd = fd_counter++;
             sock352_socket_t *copy = copysock(socket);
+            copy->type = SOCK352_ACCEPT;
             pthread_create(copy->recv_thread, NULL, recv_queue, copy);
             insert(sockets, fd, copy);
             puts("Sock352_Accept: CONNECTED!!!");
@@ -360,7 +362,7 @@ int sock352_close(int fd) {
         // Connection is closed!
         puts("Sock352_Close: CONNECTION CLOSED!");
         return SOCK352_SUCCESS;
-    } else {
+    } else if (socket->type == SOCK352_ACCEPT) {
         // Stop the receive thread so that it doesn't interfere with our closing the connection.
         puts("Sock352_Close: About to block to allow the receive queue to exit...");
         socket->recv_halt = 1;
@@ -419,6 +421,10 @@ int sock352_close(int fd) {
         // Connection is closed!
         puts("Sock352_Close: CONNECTION CLOSED!");
         return SOCK352_SUCCESS;
+    } else if (socket->type == SOCK352_LISTEN) {
+        return SOCK352_SUCCESS;
+    } else {
+        return SOCK352_FAILURE;
     }
 }
 
