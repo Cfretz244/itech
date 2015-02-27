@@ -384,7 +384,7 @@ int sock352_close(int fd) {
             puts("Sock352_Close: Successfully received FIN, sending ACK...");
 
             // Send an ACK for the FIN.
-            create_header(&resp_header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
+            create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
             encode_header(&resp_header);
             send_packet(&resp_header, NULL, 0, socket);
 
@@ -402,7 +402,7 @@ int sock352_close(int fd) {
 
         // Send FIN to client.
         puts("Sock352_Close: Sending FIN to client...");
-        create_header(&header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_FIN, 0, 0);
+        create_header(&header, ++socket->lseq_num, socket->rseq_num + 1, SOCK352_FIN, 0, 0);
         encode_header(&header);
         send_packet(&header, NULL, 0, socket);
 
