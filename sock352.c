@@ -33,7 +33,7 @@ typedef struct sock352_chunk {
 
 // Struct maintains state for a single connection.
 typedef struct sock352_socket {
-    int fd, bound, send_halt, recv_halt, lfin, rfin;
+    int fd, bound, send_halt, recv_halt, lfin, rfin, lport, rport;
     uint64_t lseq_num, rseq_num, last_ack;
     sock352_types_t type;
     sockaddr_sock352_t laddr, raddr;
@@ -81,7 +81,7 @@ int endian_check();
 
 /*----- Globals -----*/
 
-int uport = -1, fd_counter = 0;
+int uport = -1, ruport = -1, luport = -1, fd_counter = 0;
 array *sockets;
 
 /*----- Socket API Function Implementations -----*/
@@ -92,6 +92,17 @@ int sock352_init(int udp_port) {
 
     uport = udp_port;
     sockets = create_array();
+    return SOCK352_SUCCESS;
+}
+
+// Function is responsible for initializing the library when running both client and server on the same machine.
+int sock352_init2(int remote_port, int local_port) {
+    if (remote_port <= 0 || local_port <= 0 || luport >= 0 || ruport >= 0) return SOCK352_FAILURE;
+
+    ruport = remote_port;
+    luport = local_port;
+    sockets = create_array();
+    return SOCK352_SUCCESS;
 }
 
 // Function is responsible for returning a socket for the given configuration.
@@ -114,7 +125,13 @@ int sock352_bind(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     memcpy(&socket->laddr, addr, sizeof(sockaddr_sock352_t));
 
     struct sockaddr_in udp_addr;
-    setup_sockaddr(addr, &udp_addr);
+    udp_addr.sin_family = AF_INET;
+    udp_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (uport > 0) {
+        udp_addr.sin_port = htons((short) uport);
+    } else {
+        udp_addr.sin_port = htons((short) luport);
+    }
     return bind(socket->fd, (struct sockaddr *) &udp_addr, len);
 }
 
@@ -128,7 +145,11 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     // Bind to local port.
     sockaddr_sock352_t laddr;
     laddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    laddr.sin_port = htons((short) uport);
+    if (uport > 0) {
+        laddr.sin_port = htons((short) uport);
+    } else {
+        laddr.sin_port = htons((short) luport);
+    }
     int status = sock352_bind(fd, &laddr, len);
     if (status) return SOCK352_FAILURE;
 

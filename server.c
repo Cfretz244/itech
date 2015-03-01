@@ -58,7 +58,7 @@
 #define MAX_ZERO_BYTE_READS 1000000
 
 void usage() {
-		printf("server: usage: -o <output-file> -u <udp-port> \n");
+		printf("server: usage: -o <output-file> -u <udp-port> -l <local-port> -r <remote-port> \n");
 }
 
 /* this returns the lapsed number of micro-seconds given timestamps since epoch
@@ -86,7 +86,8 @@ int main(int argc, char *argv[]) {
 
 		sockaddr_sock352_t server_addr,client_addr; /*  address of the server and client*/
 		uint32_t cs352_port;
-		uint32_t udp_port;
+		uint32_t udp_port,local_port,remote_port;  /* ports used for remote library */
+		int retval;  /* return code */
 		int listen_fd, connection_fd;
 
 		char buffer[BUFFER_SIZE]; /* read/write buffer */
@@ -110,7 +111,7 @@ int main(int argc, char *argv[]) {
 		/* Parse the arguments to get: */
 		opterr = 0;
 
-		while ((c = getopt (argc, argv, "o:c:u:")) != -1) {
+		while ((c = getopt (argc, argv, "o:c:u:l:r:")) != -1) {
 			switch (c) {
 			  case 'o':
 				output_filename = optarg;
@@ -121,6 +122,12 @@ int main(int argc, char *argv[]) {
 		      case 'u':
 		        udp_port = atoi(optarg);
 		        break;
+		      case 'l':
+		    	  local_port =  atoi(optarg);
+		    	  break;
+		      case 'r':
+		    	  remote_port =  atoi(optarg);
+		    	  break;
 		      case '?':
 		    	  usage();
 		    	  exit(-1);
@@ -145,12 +152,24 @@ int main(int argc, char *argv[]) {
 			exit(-1);
 		}
 
+		/* change which init function to use based on the arguments */
+		/* if BOTH the local and remote ports are set, use the init2 function */
 
-		if (sock352_init(udp_port) < 0) {
+		if ( (remote_port > 0) && (local_port > 0) ) {
+			retval =  sock352_init2(remote_port, local_port);
+		} else {
+			retval = sock352_init(udp_port);
+		}
+		if (retval != SOCK352_SUCCESS < 0) {
 			printf("server: initialization of 352 sockets on UDP port %d failed\n",udp_port);
 			exit(-1);
 		}
 		listen_fd = sock352_socket(AF_CS352,SOCK_STREAM,0);
+
+		/* the destination port overrides the udp port setting */
+		if (remote_port != 0) {
+			udp_port = remote_port;
+		}
 
 		memset(&server_addr,0,sizeof(server_addr));
 		server_addr.sin_family = AF_CS352;

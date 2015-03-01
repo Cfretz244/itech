@@ -58,7 +58,7 @@
 
 #define BUFFER_SIZE 8192
 void usage() {
-		printf("client: usage: -f <filename> -d <destination> -u <udp-port> \n");
+		printf("client: usage: -f <filename> -d <destination> -u <udp-port> -l <local-port> -r <remote-port> \n");
 }
 
 /* timer function that returns the lapsed number of micro-seconds since epoch
@@ -90,6 +90,8 @@ int main(int argc, char *argv[]) {
 	int dest_sock;        /* destination socket address */
 	uint32_t cs352_port;  /* CS 352 port space port */
 	uint32_t udp_port;    /* UDP to run the CS 352 sockets over */
+	uint32_t local_port; /* UDP port to use as the local listen  address */
+	uint32_t remote_port;   /* UDP port to use as the remote destination address */
 	struct hostent *hp;   /* the host pointer for resolving names */
 
 	char buffer[BUFFER_SIZE]; /* read/write buffer */
@@ -102,16 +104,17 @@ int main(int argc, char *argv[]) {
 	input_filename= destination = NULL;
 	/* set defaults */
 	udp_port = SOCK352_DEFAULT_UDP_PORT;
-
+	local_port = remote_port = 0;
 	/* these support computing the file checksum */
 	MD5_CTX md5_context;
 	unsigned char md5_out[MD5_DIGEST_LENGTH];
 
+	int retval;  /* return code for library operations */
 	int c,i; /* index pointers */
 
 	/* Parse the arguments to get the input file name, port, and destination  */
 	opterr = 0;
-	while ((c = getopt (argc, argv, "f:d:u:")) != -1) {
+	while ((c = getopt (argc, argv, "f:d:u:l:r:")) != -1) {
 		switch (c) {
 	      case 'f':
 	        input_filename = optarg;
@@ -124,6 +127,12 @@ int main(int argc, char *argv[]) {
 	        break;
 	      case 'd':
 	    	  destination = optarg;
+	    	  break;
+	      case 'l':
+	    	  local_port =  atoi(optarg);
+	    	  break;
+	      case 'r':
+	    	  remote_port =  atoi(optarg);
 	    	  break;
 	      case '?':
 	    	  usage();
@@ -165,6 +174,11 @@ int main(int argc, char *argv[]) {
 		exit(-1);
 	}
 
+	/* the destination port overrides the udp port setting */
+	if (remote_port != 0) {
+		udp_port = remote_port;
+	}
+
 	/* set the destination address */
 	  dest_addr.sin_family = AF_CS352;
 	  dest_addr.sin_port = htons(udp_port);
@@ -181,16 +195,18 @@ int main(int argc, char *argv[]) {
 	    memcpy(&(dest_addr.sin_addr),hp->h_addr, hp->h_length);
 	  }
 
-	  /* Create a CS 352 stream socket */
-	if (strncmp(input_filename,"testtcp.txt",strlen("testtcp.text")) == 0) {
-		sock352_init(-1);
+    /* change which init function to use based on the arguments */
+	/* if BOTH the local and remote ports are set, use the init2 function */
+	if ( (remote_port > 0) && (local_port > 0) ) {
+		retval =  sock352_init2(remote_port, local_port);
 	} else {
-		if (sock352_init(udp_port) < 0) {
+		retval = sock352_init(udp_port);
+	}
+	if (retval == SOCK352_FAILURE) {
 			fprintf(stderr,"client: initialization of 352 sockets on UDP port %d failed\n",udp_port);
 			exit(-1);
-		}
 	}
-
+	  /* Create a CS 352 stream socket */
 	if ( (dest_sock = sock352_socket(AF_CS352, SOCK_STREAM, 0)) == -1 ) {
 		printf("client: sock called failed \n");
 		exit(-1);

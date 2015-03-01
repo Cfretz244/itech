@@ -60,6 +60,7 @@ struct sockaddr_sock352 {
 typedef struct sockaddr_sock352 sockaddr_sock352_t;  /* add type shortcut */
 
 extern int sock352_init(int udp_port);
+extern int sock352_init2(int remote_port, int local_port);
 extern int sock352_socket(int domain, int type, int protocol);
 extern int sock352_bind(int fd, sockaddr_sock352_t *addr, socklen_t len);
 extern int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len);
@@ -76,7 +77,9 @@ extern int sock352_write(int fd, void *buf, int count);
 #define SOCK352_SUCCESS (0)
 #define SOCK352_FAILURE (-1)
 
-/* these are the options for the packet */
+/* these are the options, set int the flags
+ * field, for the packet
+ * */
 
 #define SOCK352_VER_1 (0x01)
 #define SOCK352_SYN  (0x01)
