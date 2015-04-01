@@ -61,6 +61,7 @@ typedef struct sockaddr_sock352 sockaddr_sock352_t;  /* add type shortcut */
 
 extern int sock352_init(int udp_port);
 extern int sock352_init2(int remote_port, int local_port);
+extern int sock352_init3(int remote_port, int local_port, char *envp[] );
 extern int sock352_socket(int domain, int type, int protocol);
 extern int sock352_bind(int fd, sockaddr_sock352_t *addr, socklen_t len);
 extern int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len);
