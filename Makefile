@@ -36,3 +36,5 @@ clean:
 	rm *.o
 	rm $(CLIENT)
 	rm $(SERVER)
+	rm $(CLIENT2)
+	rm $(SERVER2)

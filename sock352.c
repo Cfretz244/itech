@@ -244,6 +244,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
             int fd = fd_counter++;
             sock352_socket_t *copy = copysock(socket);
             copy->type = SOCK352_ACCEPT;
+            pthread_create(copy->send_thread, NULL, send_queue, copy);
             pthread_create(copy->recv_thread, NULL, recv_queue, copy);
             insert(sockets, fd, copy);
             return fd;
@@ -630,7 +631,7 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     } else {
         return SOCK352_FAILURE;
     }
-    
+
     // This is ugly, but when the server first receives data, it needs to save the address of the host that sent it,
     // which gets done here.
     if (save_addr) {

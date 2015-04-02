@@ -103,7 +103,7 @@ int main(int argc, char *argv[], char *envp[]) {
 	int command_len, protocol_len,filename_len; /* lengths of the command and protocol strings */
 	char *server_command_s; /* string to send to the server with the command name, filename and protocol name */
 
-	int end_of_file, total_bytes, bytes_read,zero_bytes,socket_closed;
+	int end_of_file, total_bytes, bytes_read,zero_bytes,socket_closed = 0;
 	int bw;                   /* bytes written */
 	struct timeval begin_time, end_time; /* start, end time to compute bandwidth */
 	uint64_t lapsed_useconds;   /* micro-seconds since epoch */
@@ -186,7 +186,6 @@ int main(int argc, char *argv[], char *envp[]) {
 
 	/* set the destination address */
 	  dest_addr.sin_family = AF_CS352;
-	  dest_addr.sin_port = htons(udp_port);
 	  /* If an internet "a.d.c.d" address is specified, use inet_addr()
 	   * to convert it into real address.  If host name is specified,
 	   * use gethostbyname() to resolve its address */
@@ -204,8 +203,10 @@ int main(int argc, char *argv[], char *envp[]) {
 	/* if BOTH the local and remote ports are set, use the init2 function */
 	if ( (remote_port > 0) && (local_port > 0) ) {
 		retval =  sock352_init3(remote_port, local_port, envp);
+	    dest_addr.sin_port = htons(remote_port);
 	} else {
 		retval = sock352_init(udp_port);
+	    dest_addr.sin_port = htons(udp_port);
 	}
 	if (retval == SOCK352_FAILURE) {
 			fprintf(stderr,"client2: initialization of 352 sockets on UDP port %d failed\n",udp_port);

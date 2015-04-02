@@ -88,7 +88,7 @@ int main(int argc, char *argv[], char *envp) {
 
 		sockaddr_sock352_t server_addr,client_addr; /*  address of the server and client*/
 		uint32_t cs352_port;
-		uint32_t udp_port,local_port,remote_port;  /* ports used for remote library */
+		uint32_t udp_port,local_port = 0,remote_port = 0;  /* ports used for remote library */
 		int retval;  /* return code */
 		int listen_fd, connection_fd;
 
