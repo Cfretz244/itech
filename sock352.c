@@ -33,7 +33,7 @@ typedef struct sock352_chunk {
 
 // Struct maintains state for a single connection.
 typedef struct sock352_socket {
-    int fd, bound, send_halt, recv_halt, lfin, rfin, lport, rport, invalid_acks;
+    int fd, bound, lfin, rfin, lport, rport, lacked, invalid_acks;
     uint64_t lseq_num, rseq_num, last_ack;
     sock352_types_t type;
     sockaddr_sock352_t laddr, raddr;
@@ -301,51 +301,41 @@ int sock352_close(int fd) {
     sock352_socket_t *socket = retrieve(sockets, fd);
     int e_count = 0, status;
 
-    if (socket->type == SOCK352_CLIENT) {
-        // Wait until sending queue is empty so that we know all data has been sent and ACKd.
+    if (socket->type == SOCK352_CLIENT || socket->type == SOCK352_ACCEPT) {
+        // Wait until sending queue is empty so that we know all data has been set and ACKd.
         block_until_empty(socket->send_queue);
-
-        // We also need to stop the receive thread to make sure it doesn't swallow up the ACK
-        // for our FIN packet.
-        socket->recv_halt = 1;
-        pthread_join(*socket->recv_thread, NULL);
 
         // Give the sending thread our FIN packet as a final packet, and set the halting
         // flag.
         sock352_pkt_hdr_t header, resp_header;
         create_header(&header, ++socket->lseq_num, socket->rseq_num + 1, SOCK352_FIN, 0, 0);
-        socket->send_halt = 1;
+        socket->lfin = 1;
         queue_send(socket->send_queue, &header, NULL);
 
         // Join with the sending thread so that everything is cleaned up nicely.
         pthread_join(*socket->send_thread, NULL);
         empty(socket->send_queue);
 
-        // Receive the ACK packet for our FIN.
-        status = recv_packet(&resp_header, NULL, socket, 1, 0);
-        while (!valid_packet(&resp_header, NULL, SOCK352_ACK) || !valid_ack(&resp_header, socket->last_ack, 0) || status == SOCK352_FAILURE) {
+        // Wait until the receive thread has received the last ACK.
+        struct timeval time;
+        time.tv_sec = 0;
+        time.tv_usec = RECEIVE_TIMEOUT;
+        select(0, NULL, NULL, NULL, &time);
+        while (!socket->lacked) {
             if (++e_count > 5) return SOCK352_FAILURE;
             if (e_count == 1) encode_header(&header);
             send_packet(&header, NULL, 0, socket);
-            status = recv_packet(&resp_header, NULL, socket, 1, 0);
+            time.tv_sec = 0;
+            time.tv_usec = RECEIVE_TIMEOUT;
+            select(0, NULL, NULL, NULL, &time);
         }
         e_count = 0;
         socket->last_ack = resp_header.ack_no;
         socket->rseq_num = resp_header.sequence_no;
 
-        // Wait on the server to send a FIN packet.
-        status = recv_packet(&header, NULL, socket, 0, 0);
-        while (!valid_packet(&header, NULL, SOCK352_FIN) || !valid_sequence(&header, socket) || status == SOCK352_FAILURE) {
-            if (++e_count > 5) return SOCK352_FAILURE;
-            recv_packet(&header, NULL, socket, 0, 0);
-        }
-        e_count = 0;
-        socket->rseq_num = header.sequence_no;
-
-        // Send ACK in response to the server's FIN.
-        create_header(&header, socket->lseq_num++, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
-        encode_header(&header);
-        send_packet(&header, NULL, 0, socket);
+        // The remote end will eventually send a FIN, which the receive thread will ACK, and then exit.
+        // Wait until that happens.
+        pthread_join(*socket->recv_thread, NULL);
 
         // Wait one full timeout to make sure the ACK was received.
         status = recv_packet(&resp_header, NULL, socket, 1, 0);
@@ -358,60 +348,8 @@ int sock352_close(int fd) {
         // Connection is closed!
         destroy_352socket(socket);
         return SOCK352_SUCCESS;
-    } else if (socket->type == SOCK352_ACCEPT) {
-        // Stop the receive thread so that it doesn't interfere with our closing the connection.
-        socket->recv_halt = 1;
-        pthread_join(*socket->recv_thread, NULL);
-
-        sock352_pkt_hdr_t header, resp_header;
-
-        // We have not yet received the client's FIN.
-        if (!socket->rfin) {
-
-            // Receive the FIN.
-            recv_packet(&header, NULL, socket, 0, 0);
-            while (!valid_packet(&header, NULL, SOCK352_FIN) || !valid_sequence(&header, socket) || status == SOCK352_FAILURE) {
-                if (++e_count > 5) return SOCK352_FAILURE;
-                recv_packet(&header, NULL, socket, 0, 0);
-            }
-            socket->rseq_num = header.sequence_no;
-            e_count = 0;
-
-            // Send an ACK for the FIN.
-            create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
-            encode_header(&resp_header);
-            send_packet(&resp_header, NULL, 0, socket);
-
-            // Make sure ACK was received.
-            status = recv_packet(&header, NULL, socket, 1, 0);
-            while (status != SOCK352_FAILURE) {
-                if (++e_count > 5) return SOCK352_FAILURE;
-                send_packet(&resp_header, NULL, 0, socket);
-                status = recv_packet(&resp_header, NULL, socket, 1, 0);
-            }
-            e_count = 0;
-        }
-
-        // Send FIN to client.
-        create_header(&header, ++socket->lseq_num, socket->rseq_num + 1, SOCK352_FIN, 0, 0);
-        encode_header(&header);
-        send_packet(&header, NULL, 0, socket);
-
-        // Receive ACK from client.
-        status = recv_packet(&resp_header, NULL, socket, 1, 0);
-        while (!valid_packet(&resp_header, NULL, SOCK352_ACK) || !valid_ack(&resp_header, socket->last_ack, 0) || status == SOCK352_FAILURE) {
-            if (++e_count > 5) return SOCK352_FAILURE;
-            send_packet(&header, NULL, 0, socket);
-            status = recv_packet(&resp_header, NULL, socket, 1, 0);
-        }
-
-        destroy_352socket(socket);
-
-        // Connection is closed!
-        return SOCK352_SUCCESS;
     } else if (socket->type == SOCK352_LISTEN) {
         destroy_352socket(socket);
-
         return SOCK352_SUCCESS;
     } else {
         return SOCK352_FAILURE;
@@ -468,7 +406,7 @@ void destroy_352socket(sock352_socket_t *socket) {
 void *send_queue(void *sock) {
     sock352_socket_t *socket = sock;
 
-    while (!socket->send_halt) {
+    while (!socket->lfin) {
         sock352_chunk_t *chunk = dequeue(socket->send_queue);
         sock352_pkt_hdr_t header;
         memcpy(&header, &chunk->header, sizeof(sock352_pkt_hdr_t));
@@ -478,27 +416,26 @@ void *send_queue(void *sock) {
         gettimeofday(&chunk->time, NULL);
         send_packet(&header, data, len, socket);
     }
-    socket->send_halt = 0;
 
     return NULL;
 }
 
-// Function does double duty. On the client side, it handles receiving ACKS and rewinding the queue on a timeout,
-// and on the server side it handles sending ACKs.
+// Function takes care of everything related to receiving data. It's grown a little wild and out of control, so I'll
+// probably split it up at some point if I have time.
 void *recv_queue(void *sock) {
     sock352_socket_t *socket = sock;
     sock352_pkt_hdr_t header, resp_header;
     char buffer[MAX_UDP_PACKET];
 
-    while (!socket->recv_halt) {
+    while (!socket->lfin || !socket->rfin) {
         int status = recv_packet(&header, buffer, socket, 1, 0);
 
-        if (valid_packet(&header, buffer, SOCK352_ACK) && status != SOCK352_FAILURE) {
+        if (valid_packet(&header, buffer, SOCK352_ACK) && !socket->lacked && status != SOCK352_FAILURE) {
             // We've received an ACK! Time to check if it's valid.
             if (valid_ack(&header, socket->last_ack, 0)) {
                 // We've received a valid ACK! Time to remove all corresponding packets (at least one, maybe more) from the yet-to-be-acknowledged part of
                 // the send queue.
-                sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
+                sock352_chunk_t *chunk = peek_head(socket->send_queue, 0);
 
                 // Keep dropping packets from the unacknowledged, but sent, end of the queue until we reach the ACK number.
                 while (chunk && chunk->header.sequence_no < header.ack_no) {
@@ -511,13 +448,16 @@ void *recv_queue(void *sock) {
                 socket->last_ack = header.ack_no;
                 socket->rseq_num = header.sequence_no;
                 socket->invalid_acks = 0;
+                if (socket->lfin) socket->lacked = 1;
             } else {
+                // We've received a duplicate ACK. Increase the counter, and reset if need be.
                 socket->invalid_acks++;
                 if (socket->invalid_acks > 3) {
-                    // TODO: Decide what to do here.
+                    socket->invalid_acks = 0;
+                    reset(socket->send_queue);
                 }
             }
-        } else if (valid_packet(&header, buffer, SOCK352_SYN | SOCK352_ACK) && status != SOCK352_FAILURE) {
+        } else if (valid_packet(&header, buffer, SOCK352_SYN | SOCK352_ACK) && !socket->lfin && status != SOCK352_FAILURE) {
             // The last ACK in the handshake failed to arrive at the server side. Resend and reset.
             sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
             sock352_pkt_hdr_t header;
@@ -542,13 +482,19 @@ void *recv_queue(void *sock) {
                 encode_header(&resp_header);
                 send_packet(&resp_header, NULL, 0, socket);
             } else {
-                // FIXME: Need to resend old data.
+                create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
+                encode_header(&resp_header);
+                send_packet(&resp_header, NULL, 0, socket);
             }
-        } else if (status == SOCK352_FAILURE) {
-            // TODO: Think about what to do here.
+        } else if (valid_packet(&header, buffer, SOCK352_FIN) && status != SOCK352_FAILURE) {
+            socket->rfin = 1;
+            create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
+            encode_header(&resp_header);
+            send_packet(&resp_header, NULL, 0, socket);
+        } else if (status == SOCK352_FAILURE && !socket->lfin) {
+            reset(socket->send_queue);
         }
     }
-    socket->recv_halt = 0;
 
     return NULL;
 }

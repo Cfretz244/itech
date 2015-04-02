@@ -61,7 +61,7 @@ void enqueue(queue_t *q, void *data) {
 void *dequeue(queue_t *q) {
     // Validate given parameters and return immediately if given
     // list is empty and not slated for multithreaded use.
-    if (!q) return 0;
+    if (!q) return NULL;
 
     pthread_mutex_lock(q->mutex);
 
@@ -165,6 +165,7 @@ void empty(queue_t *q) {
         current = tmp;
     }
     q->head = q->tail = q->current = NULL;
+    q->count = 0;
     pthread_cond_signal(q->full);
 
     pthread_mutex_unlock(q->mutex);
