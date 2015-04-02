@@ -33,7 +33,7 @@ typedef struct sock352_chunk {
 
 // Struct maintains state for a single connection.
 typedef struct sock352_socket {
-    int fd, bound, send_halt, recv_halt, lfin, rfin, lport, rport;
+    int fd, bound, send_halt, recv_halt, lfin, rfin, lport, rport, invalid_acks;
     uint64_t lseq_num, rseq_num, last_ack;
     sock352_types_t type;
     sockaddr_sock352_t laddr, raddr;
@@ -103,6 +103,10 @@ int sock352_init2(int remote_port, int local_port) {
     luport = local_port;
     sockets = create_array();
     return SOCK352_SUCCESS;
+}
+
+int sock352_init3(int remote_port, int local_port, char **envp) {
+    return sock352_init2(remote_port, local_port);
 }
 
 // Function is responsible for returning a socket for the given configuration.
@@ -488,8 +492,9 @@ void *recv_queue(void *sock) {
     while (!socket->recv_halt) {
         int status = recv_packet(&header, buffer, socket, 1, 0);
 
-        if (socket->type == SOCK352_CLIENT && !socket->recv_halt) {
-            if (valid_packet(&header, buffer, SOCK352_ACK) && valid_ack(&header, socket->last_ack, 0) && status != SOCK352_FAILURE) {
+        if (valid_packet(&header, buffer, SOCK352_ACK) && status != SOCK352_FAILURE) {
+            // We've received an ACK! Time to check if it's valid.
+            if (valid_ack(&header, socket->last_ack, 0)) {
                 // We've received a valid ACK! Time to remove all corresponding packets (at least one, maybe more) from the yet-to-be-acknowledged part of
                 // the send queue.
                 sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
@@ -501,25 +506,27 @@ void *recv_queue(void *sock) {
                     chunk = peek_head(socket->send_queue, 0);
                 }
 
-                // Update our last_ack and remote sequence numbers.
+                // Update our last_ack and remote sequence numbers, and reset the invalid ack counter.
                 socket->last_ack = header.ack_no;
                 socket->rseq_num = header.sequence_no;
-            } else if (valid_packet(&header, buffer, SOCK352_SYN | SOCK352_ACK)) {
-                // The last ACK in the handshake failed to arrive at the server side. Resend and reset.
-                sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
-                sock352_pkt_hdr_t header;
-
-                create_header(&header, chunk->header.sequence_no - chunk->header.payload_len - 1, socket->rseq_num, SOCK352_ACK, 0, 0);
-                encode_header(&header);
-                send_packet(&header, NULL, 0, socket);
-                reset(socket->send_queue);
-            } else if (status == SOCK352_FAILURE) {
-                // We've had a timeout, so reset the current pointer on the send queue back to the first unacknowledged packet.
-                reset(socket->send_queue);
+                socket->invalid_acks = 0;
+            } else {
+                socket->invalid_acks++;
+                if (socket->invalid_acks > 3) {
+                    // TODO: Decide what to do here.
+                }
             }
-        } else if (!socket->recv_halt) {
-            // Check if the data packet we received is the correct sequence. The valid_packet call doesn't really do too much here as we haven't added checksum
-            // checking yet.
+        } else if (valid_packet(&header, buffer, SOCK352_SYN | SOCK352_ACK) && status != SOCK352_FAILURE) {
+            // The last ACK in the handshake failed to arrive at the server side. Resend and reset.
+            sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
+            sock352_pkt_hdr_t header;
+
+            create_header(&header, chunk->header.sequence_no - chunk->header.payload_len - 1, socket->rseq_num, SOCK352_ACK, 0, 0);
+            encode_header(&header);
+            send_packet(&header, NULL, 0, socket);
+            reset(socket->send_queue);
+        } else if (header.payload_len > 0 && status != SOCK352_FAILURE) {
+            // We've received a data packet. Validate it, and add it to the read queue.
             if ((valid_packet(&header, buffer, 0) || valid_packet(&header, buffer, SOCK352_FIN)) && valid_sequence(&header, socket) && status != SOCK352_FAILURE) {
                 if (header.flags == SOCK352_FIN) {
                     // We have a FIN packet. Mark that the remote host is finished.
@@ -536,6 +543,8 @@ void *recv_queue(void *sock) {
             } else {
                 // FIXME: Need to resend old data.
             }
+        } else if (status == SOCK352_FAILURE) {
+            // TODO: Think about what to do here.
         }
     }
     socket->recv_halt = 0;
