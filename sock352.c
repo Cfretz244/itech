@@ -547,12 +547,13 @@ void *recv_queue(void *sock) {
             puts("recv_queue: Oddly enough, last ACK from handshake must have been lost. Resending and resetting...");
             send_packet(&header, NULL, 0, socket);
             reset(socket->send_queue);
-        } else if (valid_packet(&header, buffer, SOCK352_FIN) && status != SOCK352_FAILURE) {
+        } else if ((valid_packet(&header, buffer, SOCK352_FIN) || valid_packet(&header, buffer, SOCK352_FIN | SOCK352_ACK)) && status != SOCK352_FAILURE) {
             printf("recv_queue: FIN bit is set on non-data packet with sequence number %ld. Marking remote FIN flag and ACKing...\n", header.sequence_no);
 
             socket->rfin = 1;
             socket->last_len = 1;
             socket->rseq_num = header.sequence_no;
+            if (valid_packet(&header, buffer, SOCK352_FIN | SOCK352_ACK)) socket->last_ack = header.ack_no;
             create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
             printf("recv_queue: Sending ACK number %ld...\n", resp_header.ack_no);
             encode_header(&resp_header);
