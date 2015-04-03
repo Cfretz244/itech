@@ -138,6 +138,7 @@ int sock352_bind(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     } else {
         udp_addr.sin_port = htons((short) luport);
     }
+
     puts("sock352_bind: Calling bind...");
     return bind(socket->fd, (struct sockaddr *) &udp_addr, len);
 }
@@ -218,6 +219,12 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
     sock352_socket_t *socket = retrieve(sockets, _fd);
     puts("sock352_accept: Starting...");
 
+    if (uport > 0) {
+        socket->raddr.sin_port = htons((short) uport);
+    } else {
+        socket->raddr.sin_port = htons((short) ruport);
+    }
+
     while (1) {
         // Wait for SYN.
         int e_count = 0, status = SOCK352_FAILURE;
@@ -231,7 +238,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
 
         // Send SYN/ACK.
         sock352_pkt_hdr_t resp_header;
-        create_header(&resp_header, 2786056924730444035, socket->rseq_num + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
+        create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
         printf("sock352_accpept: Sending SYN/ACK with sequence number %ld and ACK number %ld...\n", resp_header.sequence_no, resp_header.ack_no);
         encode_header(&resp_header);
         send_packet(&resp_header, NULL, 0, socket);
@@ -247,7 +254,6 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
             send_packet(&resp_header, NULL, 0, socket);
             status = recv_packet(&header, NULL, socket, 1, 0);
         }
-        puts("sock352_accept: Received ACK...");
         printf("sock352_accept: Received an ACK with ACK number %ld...\n", header.ack_no);
         socket->last_ack = header.ack_no;
         socket->lseq_num++;
@@ -639,7 +645,6 @@ int recv_packet(sock352_pkt_hdr_t *header, void *data, sock352_socket_t *socket,
     // This is ugly, but when the server first receives data, it needs to save the address of the host that sent it,
     // which gets done here.
     if (save_addr) {
-        socket->raddr.sin_port = sender.sin_port;
         socket->raddr.sin_addr = sender.sin_addr;
     }
 
@@ -692,7 +697,7 @@ void create_header(sock352_pkt_hdr_t *header, uint64_t sequence_num, uint64_t ac
     header->dest_port = 0;
     header->sequence_no = sequence_num;
     header->ack_no = ack_num;
-    header->window = 0;
+    header->window = MAX_WINDOW_SIZE;
     header->payload_len = len;
 }
 
