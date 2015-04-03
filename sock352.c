@@ -4,6 +4,7 @@
 #include <sys/select.h>
 #include <pthread.h>
 #include <sys/time.h>
+#include <endian.h>
 #include "sock352.h"
 #include "array.h"
 #include "queue.h"
@@ -74,10 +75,6 @@ void setup_sockaddr(sockaddr_sock352_t *addr, struct sockaddr_in *udp_addr);
 
 sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data);
 void destroy_chunk(sock352_chunk_t *chunk);
-
-uint64_t htonll(uint64_t num);
-uint64_t ntohll(uint64_t num);
-int endian_check();
 
 /*----- Globals -----*/
 
@@ -166,7 +163,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
 
     // Send SYN.
     sock352_pkt_hdr_t header;
-    create_header(&header, socket->lseq_num, 0, SOCK352_SYN, 0, 0);
+    create_header(&header, 2786056924730444035, 0, SOCK352_SYN, 0, 0);
     encode_header(&header);
     puts("sock352_connect: Sending SYN packet...");
     status = send_packet(&header, NULL, 0, socket);
@@ -682,11 +679,11 @@ int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact) {
 
 // Function is responsible for creating a header with the given properties.
 void create_header(sock352_pkt_hdr_t *header, uint64_t sequence_num, uint64_t ack_num, uint8_t flags, uint16_t checksum, uint32_t len) {
-    memset(header, 0, sizeof(header));
+    memset(header, 0, sizeof(*header));
     header->version = SOCK352_VER_1;
     header->flags = flags;
     header->protocol = 0;
-    header->header_len = sizeof(header);
+    header->header_len = sizeof(*header);
     header->checksum = checksum;
     header->source_port = 0;
     header->dest_port = 0;
@@ -702,8 +699,8 @@ void encode_header(sock352_pkt_hdr_t *header) {
     header->checksum = htons(header->checksum);
     header->source_port = htonl(header->source_port);
     header->dest_port = htonl(header->dest_port);
-    header->sequence_no = htonll(header->sequence_no);
-    header->ack_no = htonll(header->ack_no);
+    header->sequence_no = htobe64(header->sequence_no);
+    header->ack_no = htobe64(header->ack_no);
     header->window = htonl(header->window);
     header->payload_len = htonl(header->payload_len);
 }
@@ -714,8 +711,8 @@ void decode_header(sock352_pkt_hdr_t *header) {
     header->checksum = ntohs(header->checksum);
     header->source_port = ntohl(header->source_port);
     header->dest_port = ntohl(header->dest_port);
-    header->sequence_no = ntohll(header->sequence_no);
-    header->ack_no = ntohll(header->ack_no);
+    header->sequence_no = be64toh(header->sequence_no);
+    header->ack_no = be64toh(header->ack_no);
     header->window = ntohl(header->window);
     header->payload_len = ntohl(header->payload_len);
 }
@@ -749,29 +746,4 @@ sock352_chunk_t *create_chunk(sock352_pkt_hdr_t *header, void *data) {
 void destroy_chunk(sock352_chunk_t *chunk) {
     free(chunk->data);
     free(chunk);
-}
-
-// Function is responsible for rearranging 8 bytes of data into network format.
-uint64_t htonll(uint64_t num) {
-    if (endian_check()) {
-        uint32_t *f_half = (uint32_t *) &num, tmp;
-        uint32_t *s_half = f_half + 1;
-        *f_half = htonl(*f_half);
-        *s_half = htonl(*s_half);
-        tmp = *f_half;
-        memcpy(f_half, s_half, sizeof(uint32_t));
-        memcpy(s_half, &tmp, sizeof(uint32_t));
-    }
-    return num;
-}
-
-// Function is responsible for rearranging 8 bytes of data to local format.
-uint64_t ntohll(uint64_t num) {
-    return htonll(num);
-}
-
-// Function is responsible for discerning if the current machine is little endian.
-int endian_check() {
-    int num = 42;
-    return *((char *) &num) == 42;
 }
