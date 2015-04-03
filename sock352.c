@@ -65,7 +65,7 @@ int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact);
 
 /*----- Header Manipulation Function Declarations -----*/
 
-void create_header(sock352_pkt_hdr_t *header, int sequence_num, int ack_num, uint8_t flags, uint16_t checksum, uint32_t len);
+void create_header(sock352_pkt_hdr_t *header, uint64_t sequence_num, uint64_t ack_num, uint8_t flags, uint16_t checksum, uint32_t len);
 void encode_header(sock352_pkt_hdr_t *header);
 void decode_header(sock352_pkt_hdr_t *header);
 void setup_sockaddr(sockaddr_sock352_t *addr, struct sockaddr_in *udp_addr);
@@ -681,7 +681,7 @@ int valid_ack(sock352_pkt_hdr_t *header, int expected, int exact) {
 /*----- Header Manipulation Function Implementations -----*/
 
 // Function is responsible for creating a header with the given properties.
-void create_header(sock352_pkt_hdr_t *header, int sequence_num, int ack_num, uint8_t flags, uint16_t checksum, uint32_t len) {
+void create_header(sock352_pkt_hdr_t *header, uint64_t sequence_num, uint64_t ack_num, uint8_t flags, uint16_t checksum, uint32_t len) {
     memset(header, 0, sizeof(header));
     header->version = SOCK352_VER_1;
     header->flags = flags;
