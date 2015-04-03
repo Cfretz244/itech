@@ -88,7 +88,7 @@ int main(int argc, char *argv[], char *envp) {
 
 		sockaddr_sock352_t server_addr,client_addr; /*  address of the server and client*/
 		uint32_t cs352_port;
-		uint32_t udp_port,local_port = 0,remote_port = 0;  /* ports used for remote library */
+		uint32_t udp_port,local_port,remote_port;  /* ports used for remote library */
 		int retval;  /* return code */
 		int listen_fd, connection_fd;
 
@@ -100,6 +100,7 @@ int main(int argc, char *argv[], char *envp) {
 
 		/* set defaults */
 		udp_port = SOCK352_DEFAULT_UDP_PORT;
+		local_port = remote_port =0 ;
 		int client_addr_len;
 		int socket_closed;
 		int zero_bytes,bw;
@@ -145,7 +146,7 @@ int main(int argc, char *argv[], char *envp) {
 		/* if BOTH the local and remote ports are set, use the init2 function */
 
 		if ( (remote_port > 0) && (local_port > 0) ) {
-			retval =  sock352_init2(remote_port, local_port);
+		  retval =  sock352_init3(remote_port, local_port,envp);
 		} else {
 			retval = sock352_init(udp_port);
 		}

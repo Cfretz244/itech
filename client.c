@@ -100,17 +100,16 @@ int main(int argc, char *argv[]) {
 	struct timeval begin_time, end_time; /* start, end time to compute bandwidth */
 	uint64_t lapsed_useconds;   /* micro-seconds since epoch */
 	double lapsed_seconds;      /* difference from start and stop of the timer */
+	MD5_CTX md5_context;     	/*   supports computing the file checksum */
+	unsigned char md5_out[MD5_DIGEST_LENGTH];
+
+	int retval;  /* return code for library operations */
+	int c,i; /* index pointers */
 
 	input_filename= destination = NULL;
 	/* set defaults */
 	udp_port = SOCK352_DEFAULT_UDP_PORT;
 	local_port = remote_port = 0;
-	/* these support computing the file checksum */
-	MD5_CTX md5_context;
-	unsigned char md5_out[MD5_DIGEST_LENGTH];
-
-	int retval;  /* return code for library operations */
-	int c,i; /* index pointers */
 
 	/* Parse the arguments to get the input file name, port, and destination  */
 	opterr = 0;

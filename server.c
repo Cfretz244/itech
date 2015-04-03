@@ -92,22 +92,21 @@ int main(int argc, char *argv[], char *envp) {
 
 		char buffer[BUFFER_SIZE]; /* read/write buffer */
 		int end_of_file, total_bytes, bytes_read; /* for reading the input file */
+		int client_addr_len;
+		int socket_closed;
+		int zero_bytes,bw;
+		struct timeval begin_time, end_time; /* start, end time to compute bandwidth */
+		uint64_t lapsed_useconds;
+		double lapsed_seconds;
+		MD5_CTX md5_context;
+		unsigned char md5_out[MD5_DIGEST_LENGTH];
+		int c,i; /* index counters */
 
 		output_filename = NULL;
 		/* set defaults */
 		udp_port = SOCK352_DEFAULT_UDP_PORT;
-		int client_addr_len;
-		int socket_closed;
-		int zero_bytes,bw;
+		local_port = remote_port = 0 ;
 
-		struct timeval begin_time, end_time; /* start, end time to compute bandwidth */
-		uint64_t lapsed_useconds;
-		double lapsed_seconds;
-
-		MD5_CTX md5_context;
-		unsigned char md5_out[MD5_DIGEST_LENGTH];
-
-		int c,i; /* index counters */
 		/* Parse the arguments to get: */
 		opterr = 0;
 
@@ -208,6 +207,7 @@ int main(int argc, char *argv[], char *envp) {
 		file_size = ntohl(file_size_network); /* size of the file */
 
 		/* loop until we either get the whole file or there is an error */
+		total_bytes = zero_bytes = socket_closed = 0;
 		while ( (total_bytes < file_size) &&
 				(! socket_closed)) {
 			bytes_read = sock352_read(connection_fd,buffer,BUFFER_SIZE);
