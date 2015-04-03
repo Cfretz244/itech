@@ -35,7 +35,7 @@ typedef struct sock352_chunk {
 // Struct maintains state for a single connection.
 typedef struct sock352_socket {
     int fd, bound, lfin, rfin, lport, rport, lacked, lack_no, bad_acks;
-    uint64_t lseq_num, rseq_num, last_ack;
+    uint64_t lseq_num, rseq_num, last_ack, last_len;
     sock352_types_t type;
     sockaddr_sock352_t laddr, raddr;
     queue_t *send_queue, *recv_queue;
@@ -182,6 +182,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     puts("sock352_connect: Received SYN/ACK...");
     e_count = 0;
     socket->last_ack = resp_header.ack_no;
+    socket->last_len = 1;
     socket->lseq_num++;
     socket->rseq_num = resp_header.sequence_no;
 
@@ -191,10 +192,6 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     encode_header(&header);
     puts("sock352_connect: Sending ACK...");
     send_packet(&header, NULL, 0, socket);
-
-    // Technically speaking it never received this ACK, but it makes the logic less complex later if I can
-    // assume that the ACK counter should always be one more than the sequence number.
-    socket->last_ack++;
 
     // Start send and receive queue threads.
     pthread_create(socket->send_thread, NULL, send_queue, socket);
@@ -235,6 +232,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         }
         printf("sock352_accept: Received SYN with initial sequence number %ld...\n", header.sequence_no);
         socket->rseq_num = header.sequence_no;
+        socket->last_len = 1;
 
         // Send SYN/ACK.
         sock352_pkt_hdr_t resp_header;
@@ -258,6 +256,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         socket->last_ack = header.ack_no;
         socket->lseq_num++;
         socket->rseq_num = header.sequence_no;
+        socket->last_len = 0;
 
         // Either return new socket for connection, or give up and start over.
         if (valid) {
@@ -309,10 +308,10 @@ int sock352_write(int fd, void *buf, int count) {
 
         // Create the header and enqueue it with the data.
         sock352_pkt_hdr_t header;
-        socket->lseq_num += current;
-        create_header(&header, socket->lseq_num, socket->rseq_num + 1, 0, 0, current);
+        create_header(&header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, current);
         puts("sock352_write: About to queue data...");
         queue_send(socket->send_queue, &header, ptr);
+        socket->lseq_num += current;
 
         // Increase our counters.
         ptr += current;
@@ -475,9 +474,8 @@ void *recv_queue(void *sock) {
         puts("recv_queue: About to receive a packet...");
         int status = recv_packet(&header, buffer, socket, 1, 0);
 
-        if (valid_packet(&header, buffer, SOCK352_ACK) && !socket->lacked && status != SOCK352_FAILURE) {
-            // We've received an ACK! Time to check if it's valid.
-            if (valid_ack(&header, socket->last_ack, 0)) {
+        if (valid_packet(&header, buffer, SOCK352_ACK) && status != SOCK352_FAILURE) {
+            if (valid_ack(&header, socket->last_ack, 0) && header.payload_len == 0 && !socket->lacked) {
                 // We've received a valid ACK! Time to remove all corresponding packets (at least one, maybe more) from the yet-to-be-acknowledged part of
                 // the send queue.
                 printf("recv_queue: Received a valid ACK, number %ld. Updating send queue...\n", header.ack_no);
@@ -493,20 +491,49 @@ void *recv_queue(void *sock) {
 
                 // Update our last_ack and remote sequence numbers, and reset the invalid ack counter.
                 socket->last_ack = header.ack_no;
+                socket->last_len = 0;
                 socket->rseq_num = header.sequence_no;
                 socket->bad_acks = 0;
                 if (socket->lfin && header.ack_no == socket->lack_no) {
                     puts("recv_queue: Local FIN flag is set, and ACK number matches predicted last ACK. Setting last ACK flag...");
                     socket->lacked = 1;
                 }
-            } else {
+            } else if (header.payload_len == 0 && !socket->lacked) {
                 // We've received a duplicate ACK. Increase the counter, and reset if need be.
                 puts("recv_queue: Received an invalid ACK. Assuming duplication...");
                 socket->bad_acks++;
+                socket->rseq_num = header.sequence_no;
+                socket->last_len = 0;
                 if (socket->bad_acks > 3) {
                     puts("recv_queue: Received 3 invalid ACKs. Resetting send queue...");
                     socket->bad_acks = 0;
                     reset(socket->send_queue);
+                }
+            } else if (header.payload_len > 0 && !socket->rfin) {
+                // We've received a data packet. Validate it, and add it to the read queue.
+                if (valid_sequence(&header, socket) && status != SOCK352_FAILURE) {
+                    printf("recv_queue: Received a data packet with sequence number %ld...\n", header.sequence_no);
+                    if (header.flags == SOCK352_FIN) {
+                        // We have a FIN packet. Mark that the remote host is finished.
+                        puts("recv_queue: FIN bit is set. Marking remote FIN flag...");
+                        socket->rfin = 1;
+                    }
+
+                    // The packet was valid! Enqueue its data into the receive queue and send back an ACK.
+                    socket->rseq_num = header.sequence_no;
+                    socket->last_len = header.payload_len;
+                    sock352_chunk_t *chunk = create_chunk(&header, buffer);
+                    enqueue(socket->recv_queue, chunk);
+                    create_header(&resp_header, socket->lseq_num, socket->rseq_num + socket->last_len, SOCK352_ACK, 0, 0);
+                    printf("recv_queue: Sending ACK number %ld...\n", resp_header.ack_no);
+                    encode_header(&resp_header);
+                    send_packet(&resp_header, NULL, 0, socket);
+                } else {
+                    puts("recv_queue: Received an out of order data packet, sending duplicate ACK...");
+
+                    create_header(&resp_header, socket->lseq_num, socket->rseq_num + socket->last_len, SOCK352_ACK, 0, 0);
+                    encode_header(&resp_header);
+                    send_packet(&resp_header, NULL, 0, socket);
                 }
             }
         } else if (valid_packet(&header, buffer, SOCK352_SYN | SOCK352_ACK) && !socket->lfin && status != SOCK352_FAILURE) {
@@ -514,40 +541,17 @@ void *recv_queue(void *sock) {
             sock352_chunk_t *chunk = peek_head(socket->send_queue, 1);
             sock352_pkt_hdr_t header;
 
+            socket->last_len = 1;
             create_header(&header, chunk->header.sequence_no - chunk->header.payload_len - 1, socket->rseq_num, SOCK352_ACK, 0, 0);
             encode_header(&header);
             puts("recv_queue: Oddly enough, last ACK from handshake must have been lost. Resending and resetting...");
             send_packet(&header, NULL, 0, socket);
             reset(socket->send_queue);
-        } else if (header.payload_len > 0 && status != SOCK352_FAILURE) {
-            // We've received a data packet. Validate it, and add it to the read queue.
-            if ((valid_packet(&header, buffer, 0) || valid_packet(&header, buffer, SOCK352_FIN)) && valid_sequence(&header, socket) && status != SOCK352_FAILURE) {
-                printf("recv_queue: Received a data packet with sequence number %ld...\n", header.sequence_no);
-                if (header.flags == SOCK352_FIN) {
-                    // We have a FIN packet. Mark that the remote host is finished.
-                    puts("recv_queue: FIN bit is set. Marking remote FIN flag...");
-                    socket->rfin = 1;
-                }
-
-                // The packet was valid! Enqueue its data into the receive queue and send back an ACK.
-                socket->rseq_num = header.sequence_no;
-                sock352_chunk_t *chunk = create_chunk(&header, buffer);
-                enqueue(socket->recv_queue, chunk);
-                create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
-                printf("recv_queue: Sending ACK number %ld...\n", resp_header.ack_no);
-                encode_header(&resp_header);
-                send_packet(&resp_header, NULL, 0, socket);
-            } else {
-                puts("recv_queue: Received an out of order data packet, sending duplicate ACK...");
-
-                create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
-                encode_header(&resp_header);
-                send_packet(&resp_header, NULL, 0, socket);
-            }
         } else if (valid_packet(&header, buffer, SOCK352_FIN) && status != SOCK352_FAILURE) {
             printf("recv_queue: FIN bit is set on non-data packet with sequence number %ld. Marking remote FIN flag and ACKing...\n", header.sequence_no);
 
             socket->rfin = 1;
+            socket->last_len = 1;
             socket->rseq_num = header.sequence_no;
             create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
             printf("recv_queue: Sending ACK number %ld...\n", resp_header.ack_no);
@@ -558,8 +562,8 @@ void *recv_queue(void *sock) {
             reset(socket->send_queue);
         }
     }
-    puts("recv_queue: Both local and remote FIN flags are set, and the last ACK has been received. Exiting...");
 
+    puts("recv_queue: Both local and remote FIN flags are set, and the last ACK has been received. Exiting...");
     return NULL;
 }
 
@@ -667,11 +671,7 @@ int valid_packet(sock352_pkt_hdr_t *header, void *data, int flags) {
 
 // Function is responsible for checking if the received packet has the correct sequence number.
 int valid_sequence(sock352_pkt_hdr_t *header, sock352_socket_t *socket) {
-    if (header->payload_len > 0) {
-        return header->sequence_no == socket->rseq_num + header->payload_len;
-    } else {
-        return header->sequence_no == socket->rseq_num + 1;
-    }
+    return header->sequence_no == socket->rseq_num + socket->last_len;
 }
 
 // Function checks if the received packet has the correct ACK number.
