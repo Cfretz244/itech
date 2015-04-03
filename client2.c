@@ -103,7 +103,7 @@ int main(int argc, char *argv[], char *envp[]) {
 	int command_len, protocol_len,filename_len; /* lengths of the command and protocol strings */
 	char *server_command_s; /* string to send to the server with the command name, filename and protocol name */
 
-	int end_of_file, total_bytes, bytes_read,zero_bytes,socket_closed = 0;
+	int end_of_file, total_bytes, bytes_read,zero_bytes = 0,socket_closed = 0;
 	int bw;                   /* bytes written */
 	struct timeval begin_time, end_time; /* start, end time to compute bandwidth */
 	uint64_t lapsed_useconds;   /* micro-seconds since epoch */
