@@ -164,8 +164,8 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     // Send SYN.
     sock352_pkt_hdr_t header;
     create_header(&header, socket->lseq_num, 0, SOCK352_SYN, 0, 0);
+    printf("sock352_connect: Sending SYN packet with initial sequence number %ld...\n", header.sequence_no);
     encode_header(&header);
-    puts("sock352_connect: Sending SYN packet...");
     status = send_packet(&header, NULL, 0, socket);
     if (status < 0) return SOCK352_FAILURE;
 
@@ -177,6 +177,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
         send_packet(&header, NULL, 0, socket);
         recv_packet(&resp_header, NULL, socket, 1, 0);
     }
+    printf("sock352_connect: Received SYN/ACK with sequence number %ld and ACK number %ld...\n", resp_header.sequence_no, resp_header.ack_no);
     puts("sock352_connect: Received SYN/ACK...");
     e_count = 0;
     socket->last_ack = resp_header.ack_no;
@@ -185,6 +186,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
 
     // Send ACK.
     create_header(&header, socket->lseq_num, socket->rseq_num + 1, SOCK352_ACK, 0, 0);
+    printf("sock352_connect: Sending ACK number %ld...\n", header.ack_no);
     encode_header(&header);
     puts("sock352_connect: Sending ACK...");
     send_packet(&header, NULL, 0, socket);
@@ -224,14 +226,14 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
         while (!valid_packet(&header, NULL, SOCK352_SYN) || status == SOCK352_FAILURE) {
             status = recv_packet(&header, NULL, socket, 0, 1);
         }
-        puts("sock352_accept: Received SYN...");
+        printf("sock352_accept: Received SYN with initial sequence number %ld...\n", header.sequence_no);
         socket->rseq_num = header.sequence_no;
 
         // Send SYN/ACK.
         sock352_pkt_hdr_t resp_header;
-        create_header(&resp_header, socket->lseq_num, socket->rseq_num + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
+        create_header(&resp_header, 2786056924730444035, socket->rseq_num + 1, SOCK352_SYN | SOCK352_ACK, 0, 0);
+        printf("sock352_accpept: Sending SYN/ACK with sequence number %ld and ACK number %ld...\n", resp_header.sequence_no, resp_header.ack_no);
         encode_header(&resp_header);
-        puts("sock352_accept: Sending SYN/ACK...");
         send_packet(&resp_header, NULL, 0, socket);
 
         // Receive ACK.
@@ -246,6 +248,7 @@ int sock352_accept(int _fd, sockaddr_sock352_t *addr, int *len) {
             status = recv_packet(&header, NULL, socket, 1, 0);
         }
         puts("sock352_accept: Received ACK...");
+        printf("sock352_accept: Received an ACK with ACK number %ld...\n", header.ack_no);
         socket->last_ack = header.ack_no;
         socket->lseq_num++;
         socket->rseq_num = header.sequence_no;
@@ -689,7 +692,7 @@ void create_header(sock352_pkt_hdr_t *header, uint64_t sequence_num, uint64_t ac
     header->dest_port = 0;
     header->sequence_no = sequence_num;
     header->ack_no = ack_num;
-    header->window = MAX_WINDOW_SIZE;
+    header->window = 0;
     header->payload_len = len;
 }
 
