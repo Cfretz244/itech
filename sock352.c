@@ -505,9 +505,6 @@ void *recv_queue(void *sock) {
             } else if (header.payload_len == 0 && !socket->lacked) {
                 // We've received a duplicate ACK. Increase the counter, and reset if need be.
                 printf("recv_queue: Received an invalid ACK. Sequence number %ld, assuming duplication...\n", header.ack_no);
-                if (socket->rfin) {
-                    puts("recv_queue: Received an ACK after sending the FIN...");
-                }
                 socket->bad_acks++;
                 socket->rseq_num = header.sequence_no;
                 socket->last_len = 0;
@@ -536,7 +533,7 @@ void *recv_queue(void *sock) {
                     encode_header(&resp_header);
                     send_packet(&resp_header, NULL, 0, socket);
                 } else {
-                    puts("recv_queue: Received an out of order data packet, sending duplicate ACK...");
+                    printf("recv_queue: Received an out of order data packet, sequence number %ld, sending duplicate ACK...\n", header.sequence_no);
 
                     create_header(&resp_header, socket->lseq_num, socket->rseq_num + socket->last_len, SOCK352_ACK, 0, 0);
                     encode_header(&resp_header);
