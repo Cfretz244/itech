@@ -338,7 +338,7 @@ int sock352_close(int fd) {
         // flag.
         sock352_pkt_hdr_t header, resp_header;
         create_header(&header, socket->lseq_num, socket->rseq_num + socket->last_len, SOCK352_FIN, 0, 0);
-        socket->lack_no = socket->lseq_num;
+        socket->lack_no = socket->lseq_num + 1;
         socket->lfin = 1;
         printf("sock352_close: Queuing FIN packet with sequence number %ld...\n", header.sequence_no);
         queue_send(socket->send_queue, &header, NULL);
@@ -495,12 +495,16 @@ void *recv_queue(void *sock) {
                 socket->last_len = 0;
                 socket->rseq_num = header.sequence_no;
                 socket->bad_acks = 0;
-            } else if (valid_ack(&header, socket->lack_no, 1) && socket->lfin) {
-                puts("recv_queue: Local FIN flag is set, and ACK number matches predicted last ACK. Setting last ACK flag...");
+                if (valid_ack(&header, socket->lack_no, 1) && socket->lfin) {
+                    puts("recv_queue: Local FIN flag is set, and ACK number matches predicted last ACK. Setting last ACK flag...");
+                    socket->lacked = 1;
+                }
+            } else if (valid_ack(&header, socket->last_ack, 1) && socket->lfin) {
+                puts("recv_queue: Received final ACK. The professor's library forgot to increase the final ACK number, but we know what he means...");
                 socket->lacked = 1;
             } else if (header.payload_len == 0 && !socket->lacked) {
                 // We've received a duplicate ACK. Increase the counter, and reset if need be.
-                puts("recv_queue: Received an invalid ACK. Assuming duplication...");
+                printf("recv_queue: Received an invalid ACK. Sequence number %ld, assuming duplication...\n", header.ack_no);
                 if (socket->rfin) {
                     puts("recv_queue: Received an ACK after sending the FIN...");
                 }
