@@ -169,6 +169,7 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     encode_header(&header);
     status = send_packet(&header, NULL, 0, socket);
     if (status < 0) return SOCK352_FAILURE;
+    socket->lseq_num++;
 
     // Receive SYN/ACK.
     sock352_pkt_hdr_t resp_header;
@@ -183,7 +184,6 @@ int sock352_connect(int fd, sockaddr_sock352_t *addr, socklen_t len) {
     e_count = 0;
     socket->last_ack = resp_header.ack_no;
     socket->last_len = 1;
-    socket->lseq_num++;
     socket->rseq_num = resp_header.sequence_no;
 
     // Send ACK.
