@@ -4,4 +4,6 @@ server
 client
 server2
 client2
+server_crypto
+client_crypto
 *.mkv
