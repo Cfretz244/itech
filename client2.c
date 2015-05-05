@@ -184,6 +184,10 @@ int main(int argc, char *argv[], char *envp[]) {
 		exit(-1);
 	}
 
+    if (remote_port != 0) {
+        udp_port = remote_port;
+    }
+
 	/* set the destination address */
 	  dest_addr.sin_family = AF_CS352;
 	  dest_addr.sin_port = htons(udp_port);
