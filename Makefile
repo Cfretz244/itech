@@ -11,7 +11,7 @@ CLIENTSEC = client_crypto
 SERVERSEC = server_crypto
 
 CC = gcc
-CFLAGS = -I. -I./include -I sodium -lm -g -lssl -lcrypto -O0 -pthread
+CFLAGS = -I. -I./include -I sodium -lm -g -lssl -lcrypto -O6 -pthread
 
 all: $(CLIENT) $(SERVER) $(CLIENT2) $(SERVER2) $(CLIENTSEC) $(SERVERSEC) $(CLIENT4) $(SERVER4)
 
